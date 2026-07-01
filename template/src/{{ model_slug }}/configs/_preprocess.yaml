@@ -1,0 +1,11 @@
+input_dir: ???
+output_dir: ???
+intermediate_dir: null
+pipeline: null
+pipeline_overrides: []
+do_reshard: true
+do_overwrite: false
+
+hydra:
+  run: {dir: "${output_dir}/.logs"}
+  job: {chdir: false}

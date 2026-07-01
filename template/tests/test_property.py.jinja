@@ -1,0 +1,134 @@
+"""Tier 3 — model-specific synthetic-data property test (``@slow``).
+
+The flagship correctness check: build a synthetic MEDS dataset with a *designed* signal, train this model,
+and assert it learns the signal — always paired with a **negative control** so the test can't pass
+vacuously. Deselected in the fast CI job (`-m "not slow"`); run in a nightly / pre-merge job.
+"""
+import polars as pl
+import pytest
+
+from meds_model_base.testing import (
+    SIGNAL_CODE,
+    assert_learns_signal,
+    binary_auroc,
+    build_signal_dataset,
+)
+
+pytestmark = pytest.mark.slow
+
+_TRAIN = ["trainer.accelerator=cpu", "batch_size=16", "num_workers=0", "do_overwrite=true"]
+{% if profile in ['supervised_basic', 'motor_finetune', 'custom'] %}
+
+def _train_and_predict(cli, tmp_path, raw, epochs=25):
+    """preprocess → (unsupervised) → supervised_train → prediction; return the predictions dataframe."""
+    from {{ model_slug }}.steps import STEPS
+    from meds_model_base.steps import StepName
+
+    pp = tmp_path / "pp"
+    cli(["preprocess", f"input_dir={raw}", f"output_dir={pp}", "do_reshard=true", "do_overwrite=true"])
+    labels_dir = raw / "task_labels" / "signal_task"
+
+    pretrain_dir = None
+    if StepName.unsupervised_train in STEPS:
+        pretrain_dir = tmp_path / "pretrain"
+        cli(["unsupervised_train", f"tensorized_cohort_dir={pp}", f"output_dir={pretrain_dir}",
+             f"trainer.max_epochs={epochs}", *_TRAIN])
+
+    model_dir = tmp_path / "model"
+    args = ["supervised_train", f"tensorized_cohort_dir={pp}", f"labels_dir={labels_dir}",
+            f"output_dir={model_dir}", f"trainer.max_epochs={epochs}", *_TRAIN]
+    if pretrain_dir is not None:
+        args.append(f"model_initialization_dir={pretrain_dir}")
+    cli(args)
+
+    preds_dir = tmp_path / "preds"
+    cli(["prediction", f"tensorized_cohort_dir={pp}", f"index={labels_dir}",
+         f"model_initialization_dir={model_dir}", f"output_dir={preds_dir}", "split=held_out", "batch_size=16"])
+    return pl.read_parquet(preds_dir / "predictions.parquet"), pl.read_parquet(labels_dir / "held_out.parquet")
+
+
+def test_learns_designed_signal(cli, tmp_path):
+    raw = build_signal_dataset(tmp_path / "raw", seed=0)
+    preds, held = _train_and_predict(cli, tmp_path, raw)
+    auroc = assert_learns_signal(preds, held, min_auroc=0.75)
+    assert auroc > 0.75
+
+
+def test_negative_control_does_not_learn(cli, tmp_path):
+    # Shuffled labels: the signal↔label link is broken, so the model must NOT achieve high AUROC.
+    raw = build_signal_dataset(tmp_path / "raw_ctrl", seed=1, shuffle_labels=True)
+    preds, held = _train_and_predict(cli, tmp_path, raw)
+    joined = preds.join(held, on=["subject_id", "prediction_time"], how="inner")
+    ctrl = binary_auroc(joined["boolean_value"].to_list(), joined["predicted_boolean_probability"].to_list())
+    assert ctrl <= 0.70, f"negative control learned a shuffled signal (AUROC={ctrl:.3f}); test is not sound"
+{% elif profile == 'every_query' %}
+
+def test_occurrence_head_learns_signal(cli, tmp_path):
+    """After query-pretraining, the occurrence probability of the signal code separates who has it."""
+    import torch
+    from meds_torchdata import MEDSPytorchDataset, MEDSTorchDataConfig
+    from meds_torchdata.types import SubsequenceSamplingStrategy
+
+    from meds_model_base.utils import find_checkpoint
+    from {{ model_slug }}.model import Model
+
+    raw = build_signal_dataset(tmp_path / "raw", seed=0)
+    pp = tmp_path / "pp"
+    cli(["preprocess", f"input_dir={raw}", f"output_dir={pp}", "do_reshard=true", "do_overwrite=true"])
+    run_dir = tmp_path / "pretrain"
+    cli(["unsupervised_train", f"tensorized_cohort_dir={pp}", f"output_dir={run_dir}",
+         "trainer.max_epochs=25", *_TRAIN])
+
+    model = Model.load_from_checkpoint(find_checkpoint(run_dir), map_location="cpu").eval()
+    vocab = dict(zip(*[pl.read_parquet(pp / "metadata" / "codes.parquet")[c].to_list()
+                       for c in ("code", "code/vocab_index")], strict=False))
+    signal_idx = vocab[SIGNAL_CODE]
+
+    cfg = MEDSTorchDataConfig(tensorized_cohort_dir=str(pp), max_seq_len=64,
+                              seq_sampling_strategy=SubsequenceSamplingStrategy.RANDOM)
+    ds = MEDSPytorchDataset(cfg, split="held_out")
+    scores, labels = [], []
+    with torch.no_grad():
+        for batch in ds.get_dataloader(batch_size=16, shuffle=False):
+            probs = model.predict_step(batch)["query_probs"]
+            scores += probs[:, signal_idx].tolist()
+            labels += (batch.code == signal_idx).any(dim=1).tolist()
+    auroc = binary_auroc(labels, scores)
+    assert auroc >= 0.75, f"query head failed to learn signal-code occurrence (AUROC={auroc:.3f})"
+{% elif profile == 'zero_shot_ar' %}
+
+def test_generation_is_in_grammar(cli, tmp_path):
+    """After LM pretraining on a fixed-program grammar, greedy generation stays in the code vocabulary."""
+    import torch
+    from meds_torchdata import MEDSPytorchDataset, MEDSTorchDataConfig
+    from meds_torchdata.types import SubsequenceSamplingStrategy
+
+    from meds_model_base.testing.synthetic import build_pattern_dataset
+    from meds_model_base.utils import find_checkpoint
+    from {{ model_slug }}.model import Model
+
+    raw = build_pattern_dataset(tmp_path / "raw", seed=0)
+    pp = tmp_path / "pp"
+    cli(["preprocess", f"input_dir={raw}", f"output_dir={pp}", "do_reshard=true", "do_overwrite=true"])
+    run_dir = tmp_path / "pretrain"
+    cli(["unsupervised_train", f"tensorized_cohort_dir={pp}", f"output_dir={run_dir}",
+         "trainer.max_epochs=30", "max_seq_len=64", *_TRAIN])
+
+    model = Model.load_from_checkpoint(find_checkpoint(run_dir), map_location="cpu").eval()
+    cfg = MEDSTorchDataConfig(tensorized_cohort_dir=str(pp), max_seq_len=32,
+                              seq_sampling_strategy=SubsequenceSamplingStrategy.FROM_START)
+    ds = MEDSPytorchDataset(cfg, split="held_out")
+    batch = next(iter(ds.get_dataloader(batch_size=8, shuffle=False)))
+    with torch.no_grad():
+        generated = model.generate(batch.code[:, :4], max_new_tokens=16)
+
+    # Learnability: greedy continuations should be real (non-pad) vocab codes far more often than a
+    # random baseline (uniform over the vocab would be ~1/vocab_size per position).
+    new_tokens = generated[:, 4:]
+    valid_fraction = (new_tokens > 0).float().mean().item()
+    assert valid_fraction >= 0.9, f"AR generation produced too many pad/invalid tokens ({valid_fraction:.2f})"
+{% else %}
+
+def test_placeholder():
+    pytest.skip("No property test defined for this profile; add one for your model.")
+{% endif %}

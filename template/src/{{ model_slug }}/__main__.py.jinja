@@ -1,0 +1,11 @@
+"""The ``meds-model`` entry point for {{ model_name }}."""
+from importlib.resources import files
+
+from meds_model_base.dispatch import make_cli
+
+from .steps import STEPS
+
+cli = make_cli(STEPS, str(files("{{ model_slug }}").joinpath("configs")))
+
+if __name__ == "__main__":  # pragma: no cover
+    cli()

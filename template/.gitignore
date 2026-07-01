@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.pytest_cache/
+.coverage
+.hypothesis/
+*.ckpt
+*.nrt
+outputs/
+multirun/
+lightning_logs/
+logs/
+mlruns/
+wandb/
+.DS_Store

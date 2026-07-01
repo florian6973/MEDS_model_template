@@ -1,0 +1,8 @@
+# Dependencies for MEDS-DEV's isolated per-model environment.
+# MEDS-DEV runs `uv pip install -r requirements.txt` in a fresh venv, so this must install THIS model
+# package (which vendors `meds_model_base`). Point it at your published repo, or install the local checkout:
+#
+#   {{ model_slug | replace('_', '-') }} @ git+https://github.com/YOUR_ORG/{{ model_slug }}.git
+#
+# For local MEDS-DEV runs against a checkout, an editable install of the current directory works:
+-e .

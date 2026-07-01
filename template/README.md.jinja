@@ -1,0 +1,52 @@
+# {{ model_name }}
+
+{{ model_description }}
+
+A MEDS model generated from [MEDS_model_template](https://github.com/mmcdermott/MEDS_model_template)
+(`{{ profile }}` profile). It exposes the mandated `meds-model` CLI and is contributable to
+[MEDS-DEV](https://github.com/Medical-Event-Data-Standard/MEDS-DEV).
+
+## Install
+
+```bash
+uv sync --all-extras
+```
+
+## Usage
+
+This model implements the following steps (run `meds-model steps` to confirm):
+
+```bash
+{% if implements_preprocess %}meds-model preprocess input_dir=$MEDS_ROOT output_dir=data do_reshard=true
+{% endif %}{% if implements_unsupervised_train %}meds-model unsupervised_train tensorized_cohort_dir=data output_dir=runs/pretrain
+{% endif %}{% if implements_supervised_train %}meds-model supervised_train tensorized_cohort_dir=data labels_dir=$LABELS output_dir=runs/model{% if implements_unsupervised_train %} model_initialization_dir=runs/pretrain{% endif %}
+{% endif %}{% if implements_task_agnostic_inference %}meds-model task_agnostic_inference tensorized_cohort_dir=data index=$INDEX model_initialization_dir=runs/model output_dir=runs/infer
+{% endif %}{% if implements_prediction %}meds-model prediction tensorized_cohort_dir=data index=$INDEX task=$ACES_YAML model_initialization_dir=runs/model output_dir=runs/preds
+{% endif %}```
+
+The final `prediction` step writes `runs/preds/predictions.parquet` in the
+[meds-evaluation](https://github.com/kamilest/meds-evaluation) `PredictionSchema`
+(`subject_id, prediction_time, predicted_boolean_probability`). **This repo ends at producing predicted
+probabilities — evaluation is a separate, shared tool.**
+
+Any extra argument is a Hydra override (e.g. `meds-model supervised_train trainer.max_epochs=50 model.d_model=128`).
+
+## Editing
+
+- **`src/{{ model_slug }}/model.py`** — your `LightningModule`. Edit freely.
+- **`src/{{ model_slug }}/steps.py`** — which steps you implement.
+- **`src/{{ model_slug }}/configs/model/`** — your model hyperparameters.
+- **`src/meds_model_base/`** — the vendored contract (managed by `copier update`; don't edit).
+
+## Testing
+
+```bash
+uv run pytest -m "not slow"    # CLI + end-to-end pipeline smoke tests
+uv run pytest -m slow          # synthetic-signal learnability property test
+```
+
+## Updating the template
+
+```bash
+copier update
+```

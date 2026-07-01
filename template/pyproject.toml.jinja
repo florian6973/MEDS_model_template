@@ -1,0 +1,71 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "{{ model_slug | replace('_', '-') }}"
+version = "0.1.0"
+description = "{{ model_description }}"
+readme = "README.md"
+requires-python = ">={{ python_version }}"
+license = { text = "MIT" }
+authors = [{ name = "{{ author_name }}", email = "{{ author_email }}" }]
+dependencies = [
+  # Core MEDS ecosystem (the vendored `meds_model_base` package builds on these).
+  "meds~=0.4",
+  "meds-torch-data[lightning]~=0.9.0",
+  "MEDS-transforms>=0.6.7",
+  "meds-evaluation~=0.0.6",
+  "hydra-core>=1.3,<2",
+  "lightning>=2.5,<3",
+  "torch>=2.4",
+  "torchmetrics>=1.0",
+  "polars>=1.30,<2",
+  "pyarrow",
+  "numpy",
+{% if profile in ['zero_shot_ar', 'every_query'] or implements_prediction and profile == 'custom' %}  # Zero-shot / query models parse ACES task definitions:
+  "es-aces>=0.7.3",
+{% endif %}]
+
+[project.optional-dependencies]
+aces = ["es-aces>=0.7.3"]
+{% if use_wandb %}wandb = ["wandb"]
+{% endif %}{% if use_mlflow %}mlflow = ["mlflow", "psutil", "pynvml"]
+{% endif %}
+
+[project.scripts]
+"meds-model" = "{{ model_slug }}.__main__:cli"
+
+[dependency-groups]
+dev = [
+  "pytest>=8",
+  "pytest-cov",
+  "meds-testing-helpers~=0.3.1",
+  "hypothesis",
+  "ruff",
+  "pre-commit<4",
+  "yaml_to_disk",
+  "pretty-print-directory",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/{{ model_slug }}", "src/meds_model_base"]
+
+# Ship the packaged Hydra configs inside the wheel.
+[tool.hatch.build.targets.wheel.force-include]
+"src/{{ model_slug }}/configs" = "{{ model_slug }}/configs"
+
+[tool.ruff]
+line-length = 110
+target-version = "py{{ python_version | replace('.', '') }}"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "C4", "SIM", "RUF", "N"]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]
+
+[tool.pytest.ini_options]
+addopts = ["--color=yes", "--doctest-modules", "--doctest-glob=*.md"]
+testpaths = ["src", "tests"]
+markers = ["slow: designed-signal learnability test (deselect with '-m \"not slow\"')"]

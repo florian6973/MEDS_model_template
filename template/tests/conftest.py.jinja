@@ -1,0 +1,58 @@
+"""Shared test fixtures: a real tiny MEDS dataset (meds-testing-helpers) driven through the CLI.
+
+The ``simple_static_MEDS_dataset_with_task`` fixture is provided automatically by ``meds_testing_helpers``
+(a pytest plugin) — no import needed. We run the model's *actual* ``meds-model`` steps over it via
+subprocess, exactly as a user would.
+"""
+import subprocess
+from pathlib import Path
+
+import pytest
+
+
+def run_cli(args: list[str]) -> subprocess.CompletedProcess:
+    """Run ``meds-model <args>`` and fail loudly (with captured output) on non-zero exit."""
+    result = subprocess.run(["meds-model", *args], capture_output=True, text=True)
+    if result.returncode != 0:
+        raise AssertionError(
+            "Command failed: meds-model " + " ".join(args)
+            + f"\n--- stdout ---\n{result.stdout}\n--- stderr ---\n{result.stderr}"
+        )
+    return result
+
+
+@pytest.fixture
+def cli():
+    """Expose :func:`run_cli` to tests as a fixture."""
+    return run_cli
+
+
+@pytest.fixture(scope="session")
+def meds_root(simple_static_MEDS_dataset_with_task) -> Path:
+    """A tiny MEDS root (with a binary task) shipped by meds-testing-helpers."""
+    return Path(simple_static_MEDS_dataset_with_task)
+
+
+@pytest.fixture(scope="session")
+def labels_dir(meds_root) -> Path:
+    """The task-labels directory inside the fixture dataset (``subject_id, prediction_time, boolean_value``)."""
+    task_root = meds_root / "task_labels"
+    tasks = sorted(p for p in task_root.iterdir() if p.is_dir())
+    assert tasks, f"No task_labels/* directory under {meds_root}"
+    return tasks[0]
+
+
+@pytest.fixture(scope="session")
+def preprocessed(meds_root, tmp_path_factory) -> Path:
+    """Run ``meds-model preprocess`` once and return the tensorized cohort dir."""
+    out = tmp_path_factory.mktemp("preprocessed")
+    run_cli(
+        [
+            "preprocess",
+            f"input_dir={meds_root}",
+            f"output_dir={out}",
+            "do_reshard=true",
+            "do_overwrite=true",
+        ]
+    )
+    return out

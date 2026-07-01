@@ -1,0 +1,145 @@
+# Copier configuration for MEDS_model_template.
+# Docs: https://copier.readthedocs.io
+#
+# Generates a MEDS model repository exposing the mandated `meds-model <step>` CLI. Run with:
+#   copier copy gh:mmcdermott/MEDS_model_template ./my-model      # or a local path
+# and later, to pull template updates into an existing repo:
+#   copier update
+
+# ----------------------------------------------------------------------------------------------------
+# Copier engine settings
+# ----------------------------------------------------------------------------------------------------
+_min_copier_version: "9.0.0"
+_subdirectory: template
+_templates_suffix: .jinja
+_answers_file: .copier-answers.yml
+_envops:
+  # Match the Jinja settings Copier recommends; keep whitespace predictable in rendered Python/YAML.
+  keep_trailing_newline: true
+
+# Files the user is expected to hand-edit: never overwritten by `copier update`.
+_skip_if_exists:
+  - "src/{{ model_slug }}/model.py"
+  - "src/{{ model_slug }}/configs/model/**"
+
+_exclude:
+  - "*.pyc"
+  - "__pycache__"
+  - ".git"
+  - ".mypy_cache"
+  - ".pytest_cache"
+
+# Post-generation tasks (run only on first `copy`, not on `update`).
+_tasks:
+  - command: "git init -q"
+    when: "{{ _copier_operation == 'copy' }}"
+  - command: "uv sync --all-extras 2>/dev/null || true"
+    when: "{{ _copier_operation == 'copy' }}"
+  - command: "uv run pre-commit install 2>/dev/null || true"
+    when: "{{ _copier_operation == 'copy' }}"
+
+_message_after_copy: |
+  ✅ Created '{{ model_name }}' ({{ profile }} profile).
+
+  Next steps:
+    cd {{ _copier_conf.dst_path }}
+    uv sync --all-extras
+    uv run meds-model steps            # list the steps this model implements
+    uv run pytest -m "not slow"        # smoke tests
+
+_message_after_update: |
+  ✅ Updated '{{ model_name }}' to the latest template.
+  Review changes to src/meds_model_base/ (the vendored contract), then run `uv run pytest -m "not slow"`.
+
+# ----------------------------------------------------------------------------------------------------
+# Questions
+# ----------------------------------------------------------------------------------------------------
+model_name:
+  type: str
+  help: "Human-readable model name (e.g. 'GRU Sequence Model')"
+  default: "My MEDS Model"
+
+model_slug:
+  type: str
+  help: "Python package name (lowercase, underscores; must be a valid importable module)"
+  default: "{{ model_name | lower | replace(' ', '_') | replace('-', '_') }}"
+  validator: >-
+    {% if not (model_slug | regex_search('^[a-z][a-z0-9_]*$')) %}
+    'model_slug' must be lowercase letters/digits/underscores and start with a letter.
+    {% endif %}
+
+model_description:
+  type: str
+  help: "One-line description of the model"
+  default: "A MEDS model generated from MEDS_model_template."
+
+author_name:
+  type: str
+  help: "Author name"
+  default: "Your Name"
+
+author_email:
+  type: str
+  help: "Author email"
+  default: "you@example.com"
+
+python_version:
+  type: str
+  help: "Minimum supported Python version"
+  choices:
+    - "3.11"
+    - "3.12"
+    - "3.13"
+  default: "3.12"
+
+profile:
+  type: str
+  help: "Which of the five steps this model implements (presets the implements_* toggles below)"
+  choices:
+    "supervised-basic — preprocess, supervised_train, prediction {a,c,e}": "supervised_basic"
+    "zero-shot autoregressive — a,b,d,e (like MEDS-EIC-AR)": "zero_shot_ar"
+    "every-query — a,b,e (query-conditioned pretraining)": "every_query"
+    "MOTOR-style fine-tune — a,b,c,e (time-to-event pretrain + fine-tune)": "motor_finetune"
+    "custom — choose each step yourself": "custom"
+  default: "supervised_basic"
+
+# Individual step toggles. Auto-derived from `profile`; only *asked* when profile == custom.
+implements_preprocess:
+  type: bool
+  help: "Implement the `preprocess` step?"
+  default: "{{ profile != 'custom' }}"
+  when: "{{ profile == 'custom' }}"
+
+implements_unsupervised_train:
+  type: bool
+  help: "Implement the `unsupervised_train` step?"
+  default: "{{ profile in ['zero_shot_ar', 'every_query', 'motor_finetune'] }}"
+  when: "{{ profile == 'custom' }}"
+
+implements_supervised_train:
+  type: bool
+  help: "Implement the `supervised_train` step?"
+  default: "{{ profile in ['supervised_basic', 'motor_finetune'] }}"
+  when: "{{ profile == 'custom' }}"
+
+implements_task_agnostic_inference:
+  type: bool
+  help: "Implement the `task_agnostic_inference` step?"
+  default: "{{ profile == 'zero_shot_ar' }}"
+  when: "{{ profile == 'custom' }}"
+
+implements_prediction:
+  type: bool
+  help: "Implement the `prediction` step? (required for MEDS-DEV)"
+  default: true
+  when: "{{ profile == 'custom' }}"
+
+use_wandb:
+  type: bool
+  help: "Add a Weights & Biases logger option?"
+  default: false
+
+use_mlflow:
+  type: bool
+  help: "Add an MLflow logger option?"
+  default: false

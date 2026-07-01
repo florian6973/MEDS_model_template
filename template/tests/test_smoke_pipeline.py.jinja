@@ -1,0 +1,71 @@
+"""Tier 2 — end-to-end pipeline smoke on a tiny real MEDS dataset.
+
+Runs exactly the steps this model implements (read from ``STEPS``), threading each step's output into the
+next, and asserts the ``prediction`` output conforms to ``meds_evaluation.PredictionSchema`` — the
+load-bearing compatibility check with the shared evaluation tool. Trains for 2 epochs on ~6 subjects, so
+it is fast enough to run in CI (not marked ``slow``).
+"""
+import polars as pl
+from meds_evaluation.schema import PredictionSchema
+
+from meds_model_base.steps import StepName
+
+from {{ model_slug }}.steps import STEPS
+
+# Tiny, fast overrides shared by every training step in this test.
+_TRAIN = ["trainer.max_epochs=2", "trainer.accelerator=cpu", "batch_size=4", "num_workers=0", "do_overwrite=true"]
+
+
+def test_end_to_end(cli, preprocessed, labels_dir, tmp_path):
+    steps = set(STEPS)
+
+    pretrain_dir = None
+    if StepName.unsupervised_train in steps:
+        pretrain_dir = tmp_path / "pretrain"
+        cli(["unsupervised_train", f"tensorized_cohort_dir={preprocessed}", f"output_dir={pretrain_dir}", *_TRAIN])
+
+    model_dir = pretrain_dir
+    if StepName.supervised_train in steps:
+        model_dir = tmp_path / "model"
+        args = [
+            "supervised_train",
+            f"tensorized_cohort_dir={preprocessed}",
+            f"labels_dir={labels_dir}",
+            f"output_dir={model_dir}",
+            *_TRAIN,
+        ]
+        if pretrain_dir is not None:
+            args.append(f"model_initialization_dir={pretrain_dir}")
+        cli(args)
+
+    assert model_dir is not None, "model has neither an unsupervised nor a supervised training step"
+
+    if StepName.task_agnostic_inference in steps:
+        infer_dir = tmp_path / "infer"
+        cli([
+            "task_agnostic_inference",
+            f"tensorized_cohort_dir={preprocessed}",
+            f"index={labels_dir}",
+            f"model_initialization_dir={model_dir}",
+            f"output_dir={infer_dir}",
+            "split=held_out",
+            "batch_size=4",
+        ])
+        assert (infer_dir / "task_agnostic_output.parquet").exists()
+
+    if StepName.prediction in steps:
+        preds_dir = tmp_path / "preds"
+        cli([
+            "prediction",
+            f"tensorized_cohort_dir={preprocessed}",
+            f"index={labels_dir}",
+            f"model_initialization_dir={model_dir}",
+            f"output_dir={preds_dir}",
+            "split=held_out",
+            "batch_size=4",
+        ])
+        preds = pl.read_parquet(preds_dir / "predictions.parquet")
+        # The contract: the model's output is scorable by the shared meds-evaluation tool.
+        PredictionSchema.align(preds.to_arrow())
+        assert "predicted_boolean_probability" in preds.columns
+        assert {"subject_id", "prediction_time"}.issubset(preds.columns)

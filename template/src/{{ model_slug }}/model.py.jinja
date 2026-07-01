@@ -1,0 +1,30 @@
+"""The model — your editable surface. Subclass or override freely; the CLI contract is unaffected.
+
+Rendered for the ``{{ profile }}`` profile. Swap the base class, add layers, change ``compute_loss`` /
+``predict_step`` — as long as it stays a ``LightningModule`` the ``meds-model`` steps keep working.
+"""
+{% if profile == 'zero_shot_ar' %}
+from meds_model_base.profiles.autoregressive import AutoregressiveModel
+
+
+class Model(AutoregressiveModel):
+    """An autoregressive 'everything-is-code' generative model over MEDS sequences."""
+{% elif profile == 'every_query' %}
+from meds_model_base.profiles.every_query import EveryQueryModel
+
+
+class Model(EveryQueryModel):
+    """A query-conditioned pretrained model (multi-label code occurrence)."""
+{% elif profile == 'motor_finetune' %}
+from meds_model_base.profiles.motor import MotorModel
+
+
+class Model(MotorModel):
+    """A MOTOR-style time-to-event model (TTE pretraining + supervised fine-tuning)."""
+{% else %}
+from meds_model_base.profiles.supervised import SupervisedClassifier
+
+
+class Model(SupervisedClassifier):
+    """A binary classifier over MEDS sequences."""
+{% endif %}

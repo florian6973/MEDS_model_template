@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+
+# uv
+uv.lock.tmp
+
+# Testing / coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.hypothesis/
+
+# Rendered scratch model repos (from `copier copy` during local dev / tests)
+/scratch/
+/_render/
+/tmp_render/
+
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store
+
+# MEDS / model artifacts that should never be committed
+*.ckpt
+*.nrt
+outputs/
+multirun/
+lightning_logs/
+mlruns/
+wandb/

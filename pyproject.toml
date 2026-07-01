@@ -1,0 +1,62 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "meds-model-template"
+version = "0.1.0"
+description = "A Copier template for building standards-conformant MEDS models with a mandated 5-step CLI."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Matthew McDermott", email = "mattmcdermott8@gmail.com" }]
+keywords = ["MEDS", "healthcare", "machine-learning", "copier", "template", "MEDS-DEV"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+]
+dependencies = ["copier>=9.0.0"]
+
+[project.optional-dependencies]
+# Everything needed to render a template and run a generated repo's tests locally.
+test = [
+  "pytest>=8",
+  "pytest-xdist",
+  "pyyaml",
+]
+
+[project.scripts]
+# Thin bootstrap: `meds-model new ./my-model` shells out to Copier.
+"meds-model-new" = "meds_model_template.__main__:main"
+
+[project.urls]
+Homepage = "https://github.com/mmcdermott/MEDS_model_template"
+Issues = "https://github.com/mmcdermott/MEDS_model_template/issues"
+
+[tool.hatch.build.targets.wheel]
+# Only the bootstrap package is shipped as a wheel; `template/` is the Copier payload, not a Python pkg.
+packages = ["src/meds_model_template"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src/meds_model_template", "template", "copier.yml", "docs", "README.md", "LICENSE"]
+
+[dependency-groups]
+dev = ["copier>=9.0.0", "pytest>=8", "pytest-xdist", "ruff", "pre-commit<4", "pyyaml"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"
+# The copier payload contains Jinja placeholders that are not valid Python until rendered.
+extend-exclude = ["template"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "C4", "SIM", "RUF"]
+
+[tool.pytest.ini_options]
+addopts = ["--color=yes"]
+testpaths = ["tests"]
+markers = [
+  "slow: end-to-end render+train tests (deselect with '-m \"not slow\"')",
+  "render: tests that render the copier template",
+]

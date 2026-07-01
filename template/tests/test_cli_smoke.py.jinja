@@ -1,0 +1,22 @@
+"""Tier 1 — CLI smoke: every implemented step's ``--help`` composes and exits 0.
+
+Catches config-path / resolver-registration / structured-config regressions cheaply, without training.
+"""
+import subprocess
+
+import pytest
+
+from {{ model_slug }}.steps import STEPS
+
+
+def test_steps_lists_implemented():
+    result = subprocess.run(["meds-model", "steps"], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    listed = set(result.stdout.split())
+    assert listed == {s.value for s in STEPS}
+
+
+@pytest.mark.parametrize("step", [s.value for s in STEPS])
+def test_step_help_exits_zero(step):
+    result = subprocess.run(["meds-model", step, "--help"], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr

@@ -1,0 +1,37 @@
+## MEDS-DEV model specification for {{ model_name }}.
+##
+## MEDS-DEV runs each command string in an isolated environment (built from `requirements.txt`) and fills
+## the {curly} placeholders. Only `supervised.predict` is mandatory. Preprocessing is folded into the train
+## commands (there is no first-class preprocess slot). Adjust placeholder names to match your MEDS-DEV
+## version if needed.
+metadata:
+  description: "{{ model_description }}"
+  contacts:
+    - name: "{{ author_name }}"
+      email: "{{ author_email }}"
+  requirements: requirements.txt
+
+commands:
+{% if profile in ['supervised_basic'] %}  supervised:
+    train: |-
+      meds-model preprocess input_dir={dataset_dir} output_dir={output_dir}/data do_reshard=true do_overwrite=true
+      meds-model supervised_train tensorized_cohort_dir={output_dir}/data labels_dir={labels_dir} output_dir={output_dir}
+    predict: |-
+      meds-model prediction tensorized_cohort_dir={model_initialization_dir}/data index={labels_dir} split={split} model_initialization_dir={model_initialization_dir} output_dir={output_dir}
+{% elif profile == 'motor_finetune' %}  unsupervised:
+    train: |-
+      meds-model preprocess input_dir={dataset_dir} output_dir={output_dir}/data do_reshard=true do_overwrite=true
+      meds-model unsupervised_train tensorized_cohort_dir={output_dir}/data output_dir={output_dir}
+  supervised:
+    train: |-
+      meds-model supervised_train tensorized_cohort_dir={model_initialization_dir}/data labels_dir={labels_dir} model_initialization_dir={model_initialization_dir} output_dir={output_dir}
+    predict: |-
+      meds-model prediction tensorized_cohort_dir={model_initialization_dir}/data index={labels_dir} split={split} model_initialization_dir={model_initialization_dir} output_dir={output_dir}
+{% else %}  unsupervised:
+    train: |-
+      meds-model preprocess input_dir={dataset_dir} output_dir={output_dir}/data do_reshard=true do_overwrite=true
+      meds-model unsupervised_train tensorized_cohort_dir={output_dir}/data output_dir={output_dir}
+  supervised:
+    predict: |-
+      meds-model prediction tensorized_cohort_dir={model_initialization_dir}/data index={labels_dir} task={task} split={split} model_initialization_dir={model_initialization_dir} output_dir={output_dir}
+{% endif %}
