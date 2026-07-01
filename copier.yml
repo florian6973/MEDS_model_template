@@ -29,13 +29,10 @@ _exclude:
   - ".mypy_cache"
   - ".pytest_cache"
 
-# Post-generation tasks (run only on first `copy`, not on `update`).
+# Post-generation tasks (run only on first `copy`, not on `update`). Kept minimal — no heavy install is
+# auto-run; the message below tells the user to `uv sync`. Requires `copier copy --trust`.
 _tasks:
   - command: "git init -q"
-    when: "{{ _copier_operation == 'copy' }}"
-  - command: "uv sync --all-extras 2>/dev/null || true"
-    when: "{{ _copier_operation == 'copy' }}"
-  - command: "uv run pre-commit install 2>/dev/null || true"
     when: "{{ _copier_operation == 'copy' }}"
 
 _message_after_copy: |
@@ -43,7 +40,8 @@ _message_after_copy: |
 
   Next steps:
     cd {{ _copier_conf.dst_path }}
-    uv sync --all-extras
+    uv sync --all-extras               # install dependencies
+    uv run pre-commit install          # (optional) enable pre-commit hooks
     uv run meds-model steps            # list the steps this model implements
     uv run pytest -m "not slow"        # smoke tests
 
