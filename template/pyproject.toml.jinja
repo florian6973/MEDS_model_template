@@ -61,6 +61,7 @@ target-version = "py{{ python_version | replace('.', '') }}"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "C4", "SIM", "RUF", "N"]
+ignore = ["RUF022"]  # `__all__` is grouped by concern with comments, not alphabetized
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]  # re-exports

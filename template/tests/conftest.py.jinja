@@ -35,7 +35,7 @@ def meds_root(simple_static_MEDS_dataset_with_task) -> Path:
 
 @pytest.fixture(scope="session")
 def labels_dir(meds_root) -> Path:
-    """The task-labels directory inside the fixture dataset (``subject_id, prediction_time, boolean_value``)."""
+    """The task-labels dir inside the fixture (``subject_id, prediction_time, boolean_value``)."""
     task_root = meds_root / "task_labels"
     tasks = sorted(p for p in task_root.iterdir() if p.is_dir())
     assert tasks, f"No task_labels/* directory under {meds_root}"
