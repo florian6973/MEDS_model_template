@@ -5,7 +5,18 @@ and assert it learns the signal — always paired with a **negative control** so
 vacuously. Deselected in the fast CI job (`-m "not slow"`); run in a nightly / pre-merge job.
 """
 import pytest
+{% if profile in ['supervised_basic', 'motor_finetune', 'custom'] %}
+import polars as pl
 
+from meds_model_base.steps import StepName
+from meds_model_base.testing import assert_learns_signal, binary_auroc, build_signal_dataset
+
+from {{ model_slug }}.steps import STEPS
+{% elif profile == 'every_query' %}
+import polars as pl
+
+from meds_model_base.testing import SIGNAL_CODE, binary_auroc, build_signal_dataset
+{% endif %}
 pytestmark = pytest.mark.slow
 
 _TRAIN = [
@@ -15,13 +26,6 @@ _TRAIN = [
     "do_overwrite=true",
 ]
 {% if profile in ['supervised_basic', 'motor_finetune', 'custom'] %}
-import polars as pl
-
-from meds_model_base.steps import StepName
-from meds_model_base.testing import assert_learns_signal, binary_auroc, build_signal_dataset
-
-from {{ model_slug }}.steps import STEPS
-
 
 def _train_and_predict(cli, tmp_path, raw, epochs=25):
     """preprocess → (unsupervised) → supervised_train → prediction; return (predictions, held_out_labels)."""
@@ -86,10 +90,6 @@ def test_negative_control_does_not_learn(cli, tmp_path):
     )
     assert ctrl <= 0.70, f"negative control learned a shuffled signal (AUROC={ctrl:.3f}); test is unsound"
 {% elif profile == 'every_query' %}
-import polars as pl
-
-from meds_model_base.testing import SIGNAL_CODE, binary_auroc, build_signal_dataset
-
 
 def test_occurrence_head_learns_signal(cli, tmp_path):
     """After query-pretraining, the occurrence probability of the signal code separates who has it."""

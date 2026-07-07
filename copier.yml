@@ -34,6 +34,12 @@ _exclude:
 _tasks:
   - command: "git init -q"
     when: "{{ _copier_operation == 'copy' }}"
+  # Best-effort tidy of the rendered code (import order / formatting). Self-contained via uvx; skipped
+  # cleanly if offline. The result is what CI's `ruff check` / `ruff format --check` then verify.
+  - command: "uvx ruff check --fix --quiet . 2>/dev/null || true"
+    when: "{{ _copier_operation == 'copy' }}"
+  - command: "uvx ruff format --quiet . 2>/dev/null || true"
+    when: "{{ _copier_operation == 'copy' }}"
 
 _message_after_copy: |
   ✅ Created '{{ model_name }}' ({{ profile }} profile).
