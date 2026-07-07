@@ -38,7 +38,7 @@ class DefaultTaskAgnosticInferenceStep(TaskAgnosticInferenceStep):
     or generated tokens.
     """
 
-    def run(self, cfg: "DictConfig") -> Path:
+    def run(self, cfg: DictConfig) -> Path:
         module = load_trained_module(cfg, Path(cfg.model_initialization_dir))
         module.eval()
         split = cfg.get("split") or held_out_split

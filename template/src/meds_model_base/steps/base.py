@@ -57,7 +57,7 @@ class MEDSModelStep(ABC):
     config_name: ClassVar[str]
 
     @abstractmethod
-    def run(self, cfg: "DictConfig") -> "Path":
+    def run(self, cfg: DictConfig) -> Path:
         """Execute the step against a resolved Hydra ``cfg``; return the primary output directory."""
         raise NotImplementedError
 
@@ -88,10 +88,10 @@ class TrainStep(MEDSModelStep):
     @abstractmethod
     def build_module(
         self,
-        cfg: "DictConfig",
-        datamodule: "pl.LightningDataModule",
-        pretrained_dir: "Path | None" = None,
-    ) -> "pl.LightningModule":
+        cfg: DictConfig,
+        datamodule: pl.LightningDataModule,
+        pretrained_dir: Path | None = None,
+    ) -> pl.LightningModule:
         """Build the ``LightningModule`` to train.
 
         Args:
@@ -171,7 +171,7 @@ class PredictionStep(MEDSModelStep):
     config_name: ClassVar[str] = "_prediction"
 
     @abstractmethod
-    def predict(self, cfg: "DictConfig") -> "pl_df.DataFrame":
+    def predict(self, cfg: DictConfig) -> pl_df.DataFrame:
         """Produce predicted probabilities at the index timepoints (from ``cfg.index``, via the datamodule).
 
         Returns:

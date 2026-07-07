@@ -14,14 +14,13 @@ model-specific and can be as rich as needed.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
 import torch
 import torch.nn.functional as F
-from torch import Tensor, nn
-
 from meds_torchdata import MEDSTorchBatch
+from torch import Tensor, nn
 
 from ..lightning.modules import (
     PAD_INDEX,
@@ -79,7 +78,7 @@ class EveryQueryModel(BaseLightningModule):
         loss = F.binary_cross_entropy_with_logits(logits, target)
         return loss, {}
 
-    def predict_step(self, batch: MEDSTorchBatch, batch_idx: int = 0) -> dict[str, Tensor]:  # noqa: ARG002
+    def predict_step(self, batch: MEDSTorchBatch, batch_idx: int = 0) -> dict[str, Tensor]:
         """Per-code occurrence probabilities ``[B, vocab_size]`` — query any code downstream."""
         return {"query_probs": torch.sigmoid(self.occurrence_logits(batch)).detach().cpu()}
 

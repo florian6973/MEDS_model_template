@@ -33,7 +33,7 @@ def register_structured_configs(group: str = "datamodule/config") -> None:
     _STRUCTURED_CONFIGS_REGISTERED = True
 
 
-def build_datamodule(cfg: "DictConfig") -> "pl.LightningDataModule":
+def build_datamodule(cfg: DictConfig) -> pl.LightningDataModule:
     """Instantiate the meds-torch-data ``Datamodule`` from a resolved ``cfg.datamodule`` node.
 
     Thin wrapper around ``hydra.utils.instantiate`` kept as a single choke-point so every step constructs
@@ -59,7 +59,7 @@ def instantiate_group(node) -> list:
     return [instantiate(child) for child in items if child and "_target_" in child]
 
 
-def build_trainer(cfg: "DictConfig") -> "pl.Trainer":
+def build_trainer(cfg: DictConfig) -> pl.Trainer:
     """Build the Lightning ``Trainer`` from ``cfg.trainer`` with callbacks + loggers wired in.
 
     Callbacks (``cfg.callbacks``) and loggers (``cfg.logger``) are instantiated from their groups and passed

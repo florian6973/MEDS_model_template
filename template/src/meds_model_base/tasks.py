@@ -26,9 +26,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from aces.config import TaskExtractorConfig
 
 
-def load_task_config(
-    task_path: str | Path, predicates_path: str | Path | None = None
-) -> "TaskExtractorConfig":
+def load_task_config(task_path: str | Path, predicates_path: str | Path | None = None) -> TaskExtractorConfig:
     """Parse an ACES task YAML into a ``TaskExtractorConfig`` (predicates / trigger / windows / label).
 
     This reads only the task *definition* — no data is touched. Zero-shot resolvers and query models use

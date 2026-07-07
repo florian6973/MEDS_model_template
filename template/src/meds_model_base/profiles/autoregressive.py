@@ -12,13 +12,12 @@ generated repo subclasses it in ``model.py`` and can override generation.
 
 from __future__ import annotations
 
-from typing import Callable
+from collections.abc import Callable
 
 import torch
 import torch.nn.functional as F
-from torch import Tensor, nn
-
 from meds_torchdata import MEDSTorchBatch
+from torch import Tensor, nn
 
 from ..lightning.modules import PAD_INDEX, BaseLightningModule
 
@@ -92,7 +91,7 @@ class AutoregressiveModel(BaseLightningModule):
             codes = torch.cat([codes, next_code], dim=1)
         return codes
 
-    def predict_step(self, batch: MEDSTorchBatch, batch_idx: int = 0) -> dict[str, Tensor]:  # noqa: ARG002
+    def predict_step(self, batch: MEDSTorchBatch, batch_idx: int = 0) -> dict[str, Tensor]:
         """Generate future codes for each subject (used by ``task_agnostic_inference``)."""
         generated = self.generate(batch.code, self.max_new_tokens)
         return {"generated_codes": generated.detach().cpu()}

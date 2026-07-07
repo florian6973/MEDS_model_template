@@ -16,8 +16,8 @@ import polars as pl
 
 from ..schemas import (
     code_metadata_filepath,
-    dataset_metadata_filepath,
     data_subdirectory,
+    dataset_metadata_filepath,
     held_out_split,
     subject_splits_filepath,
     train_split,
@@ -111,12 +111,17 @@ def build_signal_dataset(
             events += [rng.choice(_BACKGROUND) for _ in range(rng.randint(4, 9))]
             for i, code in enumerate(events):
                 rows.append(
-                    {"subject_id": subject_id, "time": t + timedelta(hours=i), "code": code,
-                     "numeric_value": None}
+                    {
+                        "subject_id": subject_id,
+                        "time": t + timedelta(hours=i),
+                        "code": code,
+                        "numeric_value": None,
+                    }
                 )
             prediction_time = t + timedelta(hours=len(events) + 1)
-            labels.append({"subject_id": subject_id, "prediction_time": prediction_time,
-                           "boolean_value": has_signal})
+            labels.append(
+                {"subject_id": subject_id, "prediction_time": prediction_time, "boolean_value": has_signal}
+            )
             subject_id += 1
         per_split[split] = rows
         label_df = pl.DataFrame(labels).with_columns(
@@ -156,10 +161,15 @@ def build_pattern_dataset(
             for _ in range(rng.randint(3, 6)):
                 seq += list(PATTERN_PROGRAMS[rng.choice(list(PATTERN_PROGRAMS))])
             for i, code in enumerate(seq):
-                rows.append({"subject_id": subject_id, "time": t + timedelta(hours=i), "code": code,
-                             "numeric_value": None})
-            labels.append({"subject_id": subject_id,
-                           "prediction_time": t + timedelta(hours=len(seq) // 2)})
+                rows.append(
+                    {
+                        "subject_id": subject_id,
+                        "time": t + timedelta(hours=i),
+                        "code": code,
+                        "numeric_value": None,
+                    }
+                )
+            labels.append({"subject_id": subject_id, "prediction_time": t + timedelta(hours=len(seq) // 2)})
             subject_id += 1
         per_split[split] = rows
         task_labels[split] = pl.DataFrame(labels).with_columns(

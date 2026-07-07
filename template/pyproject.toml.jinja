@@ -63,7 +63,11 @@ target-version = "py{{ python_version | replace('.', '') }}"
 select = ["E", "F", "I", "UP", "B", "C4", "SIM", "RUF", "N"]
 
 [tool.ruff.lint.per-file-ignores]
-"__init__.py" = ["F401"]
+"__init__.py" = ["F401"]  # re-exports
+
+[tool.ruff.lint.pep8-naming]
+# `F` (torch.nn.functional), `L` (lightning.pytorch), and MEDS-cased names are ecosystem conventions.
+extend-ignore-names = ["F", "L", "*MEDS*"]
 
 [tool.pytest.ini_options]
 addopts = ["--color=yes", "--doctest-modules", "--doctest-glob=*.md"]

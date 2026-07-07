@@ -101,13 +101,13 @@ Other commands:
 """
 
 
-def _implemented_block(steps: "Mapping[StepName, type[MEDSModelStep]]") -> str:
+def _implemented_block(steps: Mapping[StepName, type[MEDSModelStep]]) -> str:
     if not steps:
         return "  (none)"
     return "\n".join(f"  {name.value}" for name in steps)
 
 
-def make_cli(steps: "Mapping[StepName, type[MEDSModelStep]]", config_dir: str):
+def make_cli(steps: Mapping[StepName, type[MEDSModelStep]], config_dir: str):
     """Build the ``meds-model`` entry-point callable for a model's ``STEPS`` registry.
 
     Args:
@@ -145,8 +145,7 @@ def make_cli(steps: "Mapping[StepName, type[MEDSModelStep]]", config_dir: str):
         if step_name not in steps:
             impl = ", ".join(s.value for s in steps) or "(none)"
             sys.exit(
-                f"error: this model does not implement the {step_name.value!r} step. "
-                f"Implemented: {impl}."
+                f"error: this model does not implement the {step_name.value!r} step. Implemented: {impl}."
             )
 
         # Hand the remaining argv (overrides / --help / --multirun) to Hydra. Pop the step token so
@@ -158,7 +157,7 @@ def make_cli(steps: "Mapping[StepName, type[MEDSModelStep]]", config_dir: str):
     return cli
 
 
-def _run_with_hydra(step: "MEDSModelStep", config_dir: str) -> None:
+def _run_with_hydra(step: MEDSModelStep, config_dir: str) -> None:
     """Wrap ``step.run`` in ``hydra.main`` and invoke it (consuming ``sys.argv`` overrides).
 
     Registers the meds-torch-data structured config just before composition so ``datamodule.config`` is a
@@ -174,10 +173,10 @@ def _run_with_hydra(step: "MEDSModelStep", config_dir: str) -> None:
 
 
 def run_step(
-    steps: "Mapping[StepName, type[MEDSModelStep]]",
-    step: "StepName | str",
+    steps: Mapping[StepName, type[MEDSModelStep]],
+    step: StepName | str,
     config_dir: str,
-    overrides: "list[str] | None" = None,
+    overrides: list[str] | None = None,
 ) -> None:
     """Programmatically run one step (for tests / notebooks) without touching the real ``sys.argv``.
 

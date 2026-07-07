@@ -24,6 +24,7 @@ predictions table with :func:`validate_predictions`.
 from typing import ClassVar
 
 import pyarrow as pa
+from flexible_schema import PyArrowSchema, Required
 
 # --- Canonical MEDS schemas (re-exported; do not redefine) --------------------------------------------
 from meds import (
@@ -45,7 +46,6 @@ from meds import (
 
 # --- Canonical prediction schema (re-exported) --------------------------------------------------------
 from meds_evaluation.schema import PredictionSchema
-from flexible_schema import PyArrowSchema, Required
 
 __all__ = [
     # canonical MEDS
@@ -106,8 +106,8 @@ class IndexSchema(PyArrowSchema):
 
     allow_extra_columns: ClassVar[bool] = True
 
-    subject_id: Required(pa.int64(), nullable=False)  # noqa: F821 - flexible_schema annotation
-    prediction_time: Required(pa.timestamp("us"), nullable=False)  # noqa: F821
+    subject_id: Required(pa.int64(), nullable=False)
+    prediction_time: Required(pa.timestamp("us"), nullable=False)
 
 
 class TaskAgnosticOutputSchema(PyArrowSchema):
@@ -131,8 +131,8 @@ class TaskAgnosticOutputSchema(PyArrowSchema):
 
     allow_extra_columns: ClassVar[bool] = True
 
-    subject_id: Required(pa.int64(), nullable=False)  # noqa: F821
-    prediction_time: Required(pa.timestamp("us"), nullable=False)  # noqa: F821
+    subject_id: Required(pa.int64(), nullable=False)
+    prediction_time: Required(pa.timestamp("us"), nullable=False)
 
 
 def validate_predictions(table: pa.Table) -> pa.Table:
@@ -200,9 +200,9 @@ def load_index(index_path, split: str | None = None) -> pa.Table:
     Returns:
         An :class:`IndexSchema`-aligned table with exactly ``subject_id, prediction_time``.
     """
-    import polars as pl
-
     from pathlib import Path
+
+    import polars as pl
 
     p = Path(index_path)
     if p.is_file():

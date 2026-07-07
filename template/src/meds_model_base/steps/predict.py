@@ -50,7 +50,7 @@ _SPLIT_TO_DM = {
 class _PredictionRunMixin:
     """The fixed ``run`` contract: ``predict`` → validate → write ``predictions.parquet``."""
 
-    def run(self, cfg: "DictConfig") -> Path:
+    def run(self, cfg: DictConfig) -> Path:
         predictions = self.predict(cfg)  # type: ignore[attr-defined]
         output_dir = Path(cfg.output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -64,7 +64,7 @@ class _PredictionRunMixin:
 class SupervisedPredictionStep(_PredictionRunMixin, PredictionStep):
     """Default prediction for supervised / fine-tuned models (ignores ``cfg.task``)."""
 
-    def predict(self, cfg: "DictConfig") -> pl.DataFrame:
+    def predict(self, cfg: DictConfig) -> pl.DataFrame:
         module = load_trained_module(cfg, Path(cfg.model_initialization_dir))
         module.eval()
         split = cfg.get("split") or held_out_split
@@ -83,7 +83,7 @@ class ZeroShotPredictionStep(_PredictionRunMixin, PredictionStep):
     pipeline still runs and produces a ``PredictionSchema``-valid file.
     """
 
-    def predict(self, cfg: "DictConfig") -> pl.DataFrame:
+    def predict(self, cfg: DictConfig) -> pl.DataFrame:
         module = load_trained_module(cfg, Path(cfg.model_initialization_dir))
         module.eval()
         split = cfg.get("split") or held_out_split
@@ -91,7 +91,7 @@ class ZeroShotPredictionStep(_PredictionRunMixin, PredictionStep):
         probs = self.resolve(cfg, keys, outputs)
         return keys.with_columns(pl.Series("predicted_boolean_probability", probs, dtype=pl.Float32))
 
-    def resolve(self, cfg: "DictConfig", keys: pl.DataFrame, outputs: list[dict]) -> list[float]:
+    def resolve(self, cfg: DictConfig, keys: pl.DataFrame, outputs: list[dict]) -> list[float]:
         """Turn model outputs at the index timepoints into probabilities for the ``cfg.task``.
 
         Default: pass through the model's ``predicted_boolean_probability`` if present, else ``0.5``.
@@ -101,9 +101,7 @@ class ZeroShotPredictionStep(_PredictionRunMixin, PredictionStep):
         if outputs and "predicted_boolean_probability" in outputs[0]:
             import torch
 
-            return torch.cat(
-                [o["predicted_boolean_probability"].flatten() for o in outputs]
-            ).float().tolist()
+            return torch.cat([o["predicted_boolean_probability"].flatten() for o in outputs]).float().tolist()
         logger.warning(
             "ZeroShotPredictionStep.resolve is using the placeholder constant 0.5. Override `resolve` "
             "(or have the model's predict_step emit predicted_boolean_probability) to make real predictions."
@@ -116,7 +114,7 @@ class ZeroShotPredictionStep(_PredictionRunMixin, PredictionStep):
 # ------------------------------------------------------------------------------------------------------
 
 
-def load_trained_module(cfg: "DictConfig", model_dir: Path) -> "pl_light.LightningModule":
+def load_trained_module(cfg: DictConfig, model_dir: Path) -> pl_light.LightningModule:
     """Reconstruct the trained ``LightningModule`` from a run dir's checkpoint.
 
     Uses ``cfg.model._target_`` to find the class and ``LightningModule.load_from_checkpoint`` (which reads
@@ -132,7 +130,7 @@ def load_trained_module(cfg: "DictConfig", model_dir: Path) -> "pl_light.Lightni
     return model_cls.load_from_checkpoint(ckpt_fp, map_location="cpu")
 
 
-def split_dataset_and_loader(cfg: "DictConfig", split: str):
+def split_dataset_and_loader(cfg: DictConfig, split: str):
     """Return ``(dataset, dataloader)`` for ``split`` from MTD's datamodule (built from ``cfg.datamodule``).
 
     The datamodule config points ``task_labels_dir`` at the index, so the dataset's ``schema_df`` carries
@@ -148,7 +146,7 @@ def split_dataset_and_loader(cfg: "DictConfig", split: str):
     return dataset, dataloader
 
 
-def run_predict_step(cfg: "DictConfig", module: "pl_light.LightningModule", split: str):
+def run_predict_step(cfg: DictConfig, module: pl_light.LightningModule, split: str):
     """Run ``trainer.predict`` over ``split`` and return ``(keys_df, per_batch_outputs)``.
 
     ``keys_df`` is ``schema_df[[subject_id, prediction_time]]`` (the alignment MTD already computed).

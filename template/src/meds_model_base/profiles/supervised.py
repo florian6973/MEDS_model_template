@@ -11,13 +11,12 @@ repo subclasses it in ``model.py``.
 
 from __future__ import annotations
 
-from typing import Callable
+from collections.abc import Callable
 
 import torch
 import torch.nn.functional as F
-from torch import Tensor, nn
-
 from meds_torchdata import MEDSTorchBatch
+from torch import Tensor, nn
 
 from ..lightning.modules import (
     BaseLightningModule,
@@ -54,7 +53,7 @@ class SupervisedClassifier(BaseLightningModule):
         dropout: float = 0.1,
         use_numeric_value: bool = True,
         threshold: float = 0.5,
-        optimizer: Callable[..., "torch.optim.Optimizer"] | None = None,
+        optimizer: Callable[..., torch.optim.Optimizer] | None = None,
         scheduler: Callable | None = None,
     ) -> None:
         super().__init__(optimizer=optimizer, scheduler=scheduler)
@@ -64,9 +63,7 @@ class SupervisedClassifier(BaseLightningModule):
         if encoder == "gru":
             self.encoder = GRUEncoder(d_model, num_layers=num_layers, dropout=dropout)
         elif encoder == "transformer":
-            self.encoder = TransformerEncoder(
-                d_model, nhead=nhead, num_layers=num_layers, dropout=dropout
-            )
+            self.encoder = TransformerEncoder(d_model, nhead=nhead, num_layers=num_layers, dropout=dropout)
         else:  # pragma: no cover - guarded by config choices
             raise ValueError(f"Unknown encoder {encoder!r}; expected 'gru' or 'transformer'.")
         self.head = nn.Linear(d_model, 1)
@@ -91,7 +88,7 @@ class SupervisedClassifier(BaseLightningModule):
             acc = ((logits > 0).to(target.dtype) == target).float().mean()
         return loss, {"acc": acc}
 
-    def predict_step(self, batch: MEDSTorchBatch, batch_idx: int = 0) -> dict[str, Tensor]:  # noqa: ARG002
+    def predict_step(self, batch: MEDSTorchBatch, batch_idx: int = 0) -> dict[str, Tensor]:
         """Return per-subject probabilities (aligned to the dataloader's sample order)."""
         probs = torch.sigmoid(self(batch))
         return {

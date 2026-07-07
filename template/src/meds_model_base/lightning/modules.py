@@ -14,13 +14,13 @@ time-to-event) on top.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Callable
+from collections.abc import Callable
+from typing import TYPE_CHECKING
 
 import lightning.pytorch as L
 import torch
-from torch import Tensor, nn
-
 from meds_torchdata import MEDSTorchBatch
+from torch import Tensor, nn
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from torch.optim import Optimizer
@@ -107,7 +107,7 @@ class GRUEncoder(nn.Module):
             dropout=dropout if num_layers > 1 else 0.0,
         )
 
-    def forward(self, x: Tensor, mask: Tensor | None = None) -> Tensor:  # noqa: ARG002 - mask unused (GRU)
+    def forward(self, x: Tensor, mask: Tensor | None = None) -> Tensor:
         out, _ = self.gru(x)
         return out
 
@@ -154,8 +154,8 @@ class BaseLightningModule(L.LightningModule):
 
     def __init__(
         self,
-        optimizer: Callable[..., "Optimizer"] | None = None,
-        scheduler: Callable[..., "LRScheduler"] | None = None,
+        optimizer: Callable[..., Optimizer] | None = None,
+        scheduler: Callable[..., LRScheduler] | None = None,
     ) -> None:
         super().__init__()
         self._optimizer_factory = optimizer
@@ -165,14 +165,14 @@ class BaseLightningModule(L.LightningModule):
         """Return ``(loss, metrics)`` for a batch. Implemented by subclasses."""
         raise NotImplementedError
 
-    def training_step(self, batch: MEDSTorchBatch, batch_idx: int) -> Tensor:  # noqa: ARG002
+    def training_step(self, batch: MEDSTorchBatch, batch_idx: int) -> Tensor:
         loss, metrics = self.compute_loss(batch)
         self.log("train/loss", loss, prog_bar=True, batch_size=batch.batch_size)
         for k, v in metrics.items():
             self.log(f"train/{k}", v, batch_size=batch.batch_size)
         return loss
 
-    def validation_step(self, batch: MEDSTorchBatch, batch_idx: int) -> Tensor:  # noqa: ARG002
+    def validation_step(self, batch: MEDSTorchBatch, batch_idx: int) -> Tensor:
         loss, metrics = self.compute_loss(batch)
         self.log("val/loss", loss, prog_bar=True, batch_size=batch.batch_size, sync_dist=True)
         for k, v in metrics.items():

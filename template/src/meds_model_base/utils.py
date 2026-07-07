@@ -27,9 +27,7 @@ def save_environment_snapshot(fp: Path) -> None:
         from importlib.metadata import distributions
 
         lines = sorted(
-            f"{d.metadata['Name']}=={d.version}"
-            for d in distributions()
-            if d.metadata["Name"] is not None
+            f"{d.metadata['Name']}=={d.version}" for d in distributions() if d.metadata["Name"] is not None
         )
         fp.write_text("\n".join(lines) + "\n")
     except Exception as e:  # pragma: no cover - snapshot is best-effort

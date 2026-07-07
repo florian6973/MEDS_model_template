@@ -33,10 +33,10 @@ class _DefaultTrainFlow:
 
     def build_module(
         self,
-        cfg: "DictConfig",
-        datamodule: "pl.LightningDataModule",
+        cfg: DictConfig,
+        datamodule: pl.LightningDataModule,
         pretrained_dir: Path | None = None,
-    ) -> "pl.LightningModule":
+    ) -> pl.LightningModule:
         from hydra.utils import instantiate
 
         model = instantiate(cfg.model, vocab_size=datamodule.config.vocab_size)
@@ -44,7 +44,7 @@ class _DefaultTrainFlow:
             _load_pretrained_weights(model, pretrained_dir)
         return model
 
-    def run(self, cfg: "DictConfig") -> Path:
+    def run(self, cfg: DictConfig) -> Path:
         import torch
         from lightning.pytorch import seed_everything
 
@@ -82,7 +82,7 @@ class DefaultSupervisedTrainStep(_DefaultTrainFlow, SupervisedTrainStep):
     """
 
 
-def _load_pretrained_weights(model: "pl.LightningModule", pretrained_dir: Path) -> None:
+def _load_pretrained_weights(model: pl.LightningModule, pretrained_dir: Path) -> None:
     """Warm-start ``model`` from a checkpoint in ``pretrained_dir`` (non-strict; overlapping params only)."""
     import torch
 
@@ -101,7 +101,7 @@ def _load_pretrained_weights(model: "pl.LightningModule", pretrained_dir: Path) 
     )
 
 
-def _persist_best_checkpoint(trainer: "pl.Trainer", output_dir: Path) -> None:
+def _persist_best_checkpoint(trainer: pl.Trainer, output_dir: Path) -> None:
     """Copy the monitored best checkpoint to ``output_dir/best_model.ckpt`` (or snapshot current weights)."""
     dst = output_dir / BEST_CKPT_FILENAME
     cb = getattr(trainer, "checkpoint_callback", None)

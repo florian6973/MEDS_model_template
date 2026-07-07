@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 def _run_streamed(cmd: list[str], *, env: dict[str, str] | None = None, stage: str) -> None:
     """Run ``cmd`` streaming stdout/stderr live; raise on non-zero exit."""
     logger.info("[%s] running: %s", stage, " ".join(cmd))
-    result = subprocess.run(cmd, env=env, check=False)  # noqa: S603 - trusted CLI args
+    result = subprocess.run(cmd, env=env, check=False)
     if result.returncode != 0:
         raise RuntimeError(f"{stage} failed with exit code {result.returncode}. See output above.")
 
@@ -37,7 +37,7 @@ def _run_streamed(cmd: list[str], *, env: dict[str, str] | None = None, stage: s
 class DefaultPreprocessStep(PreprocessStep):
     """Default preprocessing: (optional) MEDS-transforms pipeline → MTD tensorization."""
 
-    def run(self, cfg: "DictConfig") -> Path:
+    def run(self, cfg: DictConfig) -> Path:
         input_dir = Path(cfg.input_dir)
         output_dir = Path(cfg.output_dir)
         do_reshard = bool(cfg.get("do_reshard", True))
@@ -56,7 +56,7 @@ class DefaultPreprocessStep(PreprocessStep):
         return output_dir
 
     @staticmethod
-    def _run_meds_transforms(pipeline: str, input_dir: Path, output_dir: Path, cfg: "DictConfig") -> None:
+    def _run_meds_transforms(pipeline: str, input_dir: Path, output_dir: Path, cfg: DictConfig) -> None:
         """Run a MEDS-transforms pipeline YAML, overriding its input/output dirs."""
         extra = list(cfg.get("pipeline_overrides", []) or [])
         _run_streamed(

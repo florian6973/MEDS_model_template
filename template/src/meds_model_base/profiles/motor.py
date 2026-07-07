@@ -15,13 +15,12 @@ native reimplementation of the MOTOR *approach* on the modern stack — no FEMR 
 
 from __future__ import annotations
 
-from typing import Callable
+from collections.abc import Callable
 
 import torch
 import torch.nn.functional as F
-from torch import Tensor, nn
-
 from meds_torchdata import MEDSTorchBatch
+from torch import Tensor, nn
 
 from ..lightning.modules import (
     BaseLightningModule,
@@ -89,7 +88,7 @@ class MotorModel(BaseLightningModule):
         loss = nll.sum() / mask.sum().clamp(min=1.0)
         return loss, {"mode_tte": torch.ones((), device=loss.device)}
 
-    def predict_step(self, batch: MEDSTorchBatch, batch_idx: int = 0) -> dict[str, Tensor]:  # noqa: ARG002
+    def predict_step(self, batch: MEDSTorchBatch, batch_idx: int = 0) -> dict[str, Tensor]:
         probs = torch.sigmoid(self.cls_head(self._pooled(batch)).squeeze(-1))
         return {
             "predicted_boolean_probability": probs.detach().cpu(),

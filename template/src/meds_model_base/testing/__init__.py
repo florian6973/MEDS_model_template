@@ -14,9 +14,9 @@ from .property import assert_learns_signal, binary_auroc
 from .synthetic import SIGNAL_CODE, build_pattern_dataset, build_signal_dataset
 
 __all__ = [
-    "build_signal_dataset",
-    "build_pattern_dataset",
     "SIGNAL_CODE",
-    "binary_auroc",
     "assert_learns_signal",
+    "binary_auroc",
+    "build_pattern_dataset",
+    "build_signal_dataset",
 ]
