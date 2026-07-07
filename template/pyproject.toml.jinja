@@ -69,6 +69,11 @@ select = ["E", "F", "I", "UP", "B", "C4", "SIM", "RUF", "N"]
 # `F` (torch.nn.functional), `L` (lightning.pytorch), and MEDS-cased names are ecosystem conventions.
 extend-ignore-names = ["F", "L", "*MEDS*"]
 
+[tool.ruff.lint.isort]
+# The vendored contract sorts as a third-party import (before your own first-party package), so import
+# ordering is stable regardless of the model slug.
+known-third-party = ["meds_model_base"]
+
 [tool.pytest.ini_options]
 addopts = ["--color=yes", "--doctest-modules", "--doctest-glob=*.md"]
 testpaths = ["src", "tests"]

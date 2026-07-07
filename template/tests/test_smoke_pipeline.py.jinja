@@ -13,7 +13,13 @@ from meds_model_base.steps import StepName
 from {{ model_slug }}.steps import STEPS
 
 # Tiny, fast overrides shared by every training step in this test.
-_TRAIN = ["trainer.max_epochs=2", "trainer.accelerator=cpu", "batch_size=4", "num_workers=0", "do_overwrite=true"]
+_TRAIN = [
+    "trainer.max_epochs=2",
+    "trainer.accelerator=cpu",
+    "batch_size=4",
+    "num_workers=0",
+    "do_overwrite=true",
+]
 
 
 def test_end_to_end(cli, preprocessed, labels_dir, tmp_path):
@@ -22,7 +28,12 @@ def test_end_to_end(cli, preprocessed, labels_dir, tmp_path):
     pretrain_dir = None
     if StepName.unsupervised_train in steps:
         pretrain_dir = tmp_path / "pretrain"
-        cli(["unsupervised_train", f"tensorized_cohort_dir={preprocessed}", f"output_dir={pretrain_dir}", *_TRAIN])
+        cli([
+            "unsupervised_train",
+            f"tensorized_cohort_dir={preprocessed}",
+            f"output_dir={pretrain_dir}",
+            *_TRAIN,
+        ])
 
     model_dir = pretrain_dir
     if StepName.supervised_train in steps:
