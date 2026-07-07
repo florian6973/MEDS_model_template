@@ -1,0 +1,39 @@
+name: CI
+on: [push, pull_request]
+
+jobs:
+  # Fast checks on the template itself: lint the bootstrap package + render every profile and verify
+  # structure / syntactic validity (no model training).
+  template:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uv sync --group dev
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: uv run pytest tests/ -q
+
+  # Heavier check: render one profile, install it, and run its own smoke suite (real preprocess + train +
+  # predict on tiny meds-testing-helpers data). Proves a generated repo works end to end.
+  rendered-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - name: Render the supervised-basic profile
+        run: |
+          uvx copier copy --vcs-ref=HEAD --defaults --trust \
+            --data model_slug=demo_model --data model_name="Demo Model" \
+            --data profile=supervised_basic . /tmp/demo_model
+      - name: Install torch (CPU) + run the generated repo's smoke tests
+        working-directory: /tmp/demo_model
+        run: |
+          uv venv
+          uv pip install torch --index-url https://download.pytorch.org/whl/cpu
+          uv pip install -e . --group dev
+          uv run pytest -m "not slow" -q
