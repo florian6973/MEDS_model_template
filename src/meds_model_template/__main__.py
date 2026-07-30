@@ -5,8 +5,9 @@ Usage::
     meds-model-new ./my-model                       # from the published template on GitHub
     meds-model-new ./my-model --src /path/to/template
     meds-model-new ./my-model --profile zero_shot_ar --defaults
+    meds-model-new ./my-model --data model_slug=my_model --vcs-ref=HEAD
 
-Anything after ``--`` is forwarded verbatim to ``copier``.
+Any option this wrapper does not define is forwarded verbatim to ``copier copy``.
 """
 
 from __future__ import annotations
@@ -16,7 +17,7 @@ import subprocess
 import sys
 
 #: Default template source used when ``--src`` is not given.
-DEFAULT_SRC = "gh:mmcdermott/MEDS_model_template"
+DEFAULT_SRC = "gh:florian6973/MEDS_model_template"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -40,16 +41,24 @@ def main(argv: list[str] | None = None) -> int:
         help="Accept all default answers (non-interactive).",
     )
     parser.add_argument(
-        "copier_args",
-        nargs="*",
-        help="Extra arguments forwarded to `copier copy` (e.g. --data profile=zero_shot_ar).",
+        "--profile",
+        help=(
+            "Which command chain to generate (supervised_basic, zero_shot_ar, every_query, "
+            "motor_finetune, probe, custom). Forwarded as `--data profile=<value>`; the value is validated "
+            "by the template rather than here, so this stays in sync with copier.yml automatically."
+        ),
     )
-    args = parser.parse_args(argv)
+    # Everything argparse does not recognize is forwarded verbatim, so any copier flag works without a `--`
+    # separator. The trade-off is that a typo'd option reaches copier instead of erroring here — acceptable
+    # for a pass-through wrapper, since copier reports it.
+    args, passthrough = parser.parse_known_args(argv)
 
     cmd = ["copier", "copy", args.src, args.destination]
     if args.defaults:
         cmd.append("--defaults")
-    cmd.extend(args.copier_args)
+    if args.profile:
+        cmd += ["--data", f"profile={args.profile}"]
+    cmd.extend(passthrough)
 
     try:
         return subprocess.run(cmd, check=False).returncode
