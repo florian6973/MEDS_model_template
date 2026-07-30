@@ -12,11 +12,15 @@ Deselected in the fast CI job (`-m "not slow"`); run it before you claim the mod
 """
 import polars as pl
 import pytest
-from meds_model_base.testing import assert_learns_signal, binary_auroc, build_signal_dataset, skip_if_stub
+from meds_model_base.testing import (
+    assert_learns_signal,
+    binary_auroc,
+    build_signal_dataset,
+    build_workspace,
+    skip_if_stub,
+)
 
 from {{ model_slug }}.model import Model
-
-from .conftest import build_workspace
 
 pytestmark = pytest.mark.slow
 

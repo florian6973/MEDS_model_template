@@ -295,6 +295,32 @@ def test_every_command_class_is_reachable():
 
 @pytest.mark.parametrize("profile", sorted(PROFILE_COMMANDS))
 @pytest.mark.render
+def test_rendered_tests_are_importable(tmp_path, profile):
+    """Rendered test modules must be importable as top-level modules.
+
+    ``tests/`` has no ``__init__.py``, so pytest imports each module top-level and a relative import raises
+    ``ImportError: attempted relative import with no known parent package``. That happens at *collection*
+    time, which is what makes it nasty: it fires before ``-m "not slow"`` can deselect anything, so one bad
+    import in a slow-marked module takes down the entire run.
+
+    Byte-compiling does not catch it — the syntax is valid — and this repo cannot run the rendered suite
+    (it needs torch), so the check has to be structural.
+    """
+    dst = tmp_path / f"imports_{profile}"
+    _render(dst, profile)
+
+    for fp in sorted((dst / "tests").glob("*.py")):
+        for node in ast.walk(ast.parse(fp.read_text())):
+            if isinstance(node, ast.ImportFrom) and node.level:
+                pytest.fail(
+                    f"{profile}: tests/{fp.name} line {node.lineno} uses a relative import "
+                    f"(`from {'.' * node.level}{node.module or ''} import ...`). tests/ is not a package; "
+                    "import from `meds_model_base.testing` instead."
+                )
+
+
+@pytest.mark.parametrize("profile", sorted(PROFILE_COMMANDS))
+@pytest.mark.render
 def test_rendered_repo_passes_ruff(tmp_path, profile):
     """The rendered repo must pass its *own* ruff config.
 

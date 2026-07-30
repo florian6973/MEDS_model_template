@@ -1,146 +1,35 @@
-"""Shared fixtures, plus one driver that runs whatever DAG this model registers.
+"""Fixtures over a tiny real MEDS dataset.
 
 The ``simple_static_MEDS_dataset_with_task`` fixture comes from ``meds_testing_helpers`` (a pytest plugin)
-— no import needed. Commands run via subprocess, exactly as a user would run them, so the tests exercise
-the real dispatcher, config composition and artifact publication rather than internal calls.
+— no import needed.
 
-``run_chain`` is the important piece: it reads ``COMMANDS`` and each command's ``supported_sources`` and
-threads the artifacts together accordingly. Both the conformance test and the property test drive the model
-through it, so neither hardcodes a chain that could drift from what the model actually declares.
+The machinery for actually driving this model's DAG lives in ``meds_model_base.testing`` rather than here,
+so any test module can import it. A ``conftest.py`` is not importable from a sibling test module: ``tests/``
+is not a package, and ``from .conftest import ...`` fails at collection time — before ``-m "not slow"`` can
+deselect anything.
 """
-import subprocess
 from pathlib import Path
 
 import pytest
-from meds_model_base.commands import CommandName
+from meds_model_base.testing import build_workspace, run_chain, run_cli
 
 from {{ model_slug }}.commands import COMMANDS
 
 
-def run_cli(args: list[str]) -> subprocess.CompletedProcess:
-    """Run ``meds-model <args>`` and fail loudly (with captured output) on non-zero exit."""
-    result = subprocess.run(["meds-model", *args], capture_output=True, text=True)
-    if result.returncode != 0:
-        raise AssertionError(
-            "Command failed: meds-model " + " ".join(args)
-            + f"\n--- stdout ---\n{result.stdout}\n--- stderr ---\n{result.stderr}"
-        )
-    return result
-
-
-def supported_sources(command: CommandName) -> frozenset[str]:
-    """The input sources the class registered for ``command`` declares it handles."""
-    cls = COMMANDS[command]
-    return cls.supported_sources if cls.supported_sources is not None else frozenset(cls.sources)
-
-
-def build_workspace(meds_root: Path, task_file: Path, workspace: Path) -> Path:
-    """Run the two preprocessing commands; return the shared ``data_dir``. No model involved."""
-    run_cli([
-        "preprocess_data",
-        f"external_meds_dir={meds_root}",
-        f"output_data_dir={workspace}",
-        "do_reshard=true",
-        "do_overwrite=true",
-    ])
-    run_cli([
-        "preprocess_task",
-        f"input_data_dir={workspace}",
-        f"external_task_file={task_file}",
-        "do_overwrite=true",
-    ])
-    return workspace
-
-
-def run_chain(data_dir: Path, out_dir: Path, *, epochs: int = 2, batch_size: int = 4) -> dict[str, Path]:
-    """Run every command this model registers, in dependency order, over ``data_dir``.
-
-    Returns the artifacts produced, keyed by role. Which optional source each command receives comes from
-    the registered class's ``supported_sources``, so this follows the model's own declaration rather than
-    an assumption about the profile.
-    """
-    train = [
-        f"trainer.max_epochs={epochs}",
-        "trainer.accelerator=cpu",
-        f"batch_size={batch_size}",
-        "num_workers=0",
-        "do_overwrite=true",
-    ]
-    artifacts: dict[str, Path] = {"data": data_dir}
-
-    if CommandName.pretrain in COMMANDS:
-        pretrained = out_dir / "pretrained"
-        run_cli([
-            "pretrain",
-            f"input_data_dir={data_dir}",
-            f"output_pretrained_model_dir={pretrained}",
-            *train,
-        ])
-        artifacts["pretrained"] = pretrained
-
-    if CommandName.infer in COMMANDS:
-        assert "pretrained" in artifacts, "`infer` requires a pretrained model"
-        subdir = "inference/artifacts"
-        run_cli([
-            "infer",
-            f"input_data_dir={data_dir}",
-            f"input_pretrained_model_dir={artifacts['pretrained']}",
-            f"output_inference_subdir={subdir}",
-            f"batch_size={batch_size}",
-            "do_overwrite=true",
-        ])
-        artifacts["inference"] = data_dir / subdir
-        artifacts["inference_subdir"] = Path(subdir)
-
-    if CommandName.supervised_train in COMMANDS:
-        supervised = out_dir / "supervised"
-        args = [
-            "supervised_train",
-            f"input_data_dir={data_dir}",
-            f"output_supervised_model_dir={supervised}",
-            *train,
-        ]
-        sources = supported_sources(CommandName.supervised_train)
-        if "input_pretrained_model_dir" in sources and "pretrained" in artifacts:
-            args.append(f"input_pretrained_model_dir={artifacts['pretrained']}")
-        elif "input_inference_subdir" in sources and "inference_subdir" in artifacts:
-            args.append(f"input_inference_subdir={artifacts['inference_subdir']}")
-        run_cli(args)
-        artifacts["supervised"] = supervised
-
-    if CommandName.predict in COMMANDS:
-        predictions = out_dir / "predictions"
-        args = ["predict", f"input_data_dir={data_dir}"]
-        sources = supported_sources(CommandName.predict)
-        if "input_supervised_model_dir" in sources:
-            args.append(f"input_supervised_model_dir={artifacts['supervised']}")
-        elif "input_pretrained_model_dir" in sources:
-            args.append(f"input_pretrained_model_dir={artifacts['pretrained']}")
-        elif "input_inference_subdir" in sources:
-            args.append(f"input_inference_subdir={artifacts['inference_subdir']}")
-        # An empty `sources` means this model ships its own weights and takes no source argument.
-        run_cli([
-            *args,
-            f"output_predictions_dir={predictions}",
-            "splits=[held_out]",
-            f"batch_size={batch_size}",
-            "do_overwrite=true",
-        ])
-        artifacts["predictions"] = predictions
-
-    return artifacts
-
-
 @pytest.fixture
 def cli():
-    """Expose :func:`run_cli` to tests as a fixture."""
+    """Run ``meds-model <args>``, raising with captured output on failure."""
     return run_cli
 
 
 @pytest.fixture
 def chain():
-    """Expose :func:`run_chain` to tests as a fixture."""
-    return run_chain
+    """Run every command this model registers over a prepared ``data_dir``."""
+
+    def _chain(data_dir: Path, out_dir: Path, **kwargs):
+        return run_chain(COMMANDS, data_dir, out_dir, **kwargs)
+
+    return _chain
 
 
 @pytest.fixture(scope="session")
