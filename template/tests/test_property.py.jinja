@@ -1,225 +1,51 @@
-"""Tier 3 — model-specific synthetic-data property test (``@slow``).
+"""Tier 3 — does the model actually learn? (``@slow``)
 
-The flagship correctness check: build a synthetic MEDS dataset with a *designed* signal, train this model,
-and assert it learns the signal — always paired with a **negative control** so the test can't pass
-vacuously. Deselected in the fast CI job (`-m "not slow"`); run in a nightly / pre-merge job.
+The flagship correctness check, and the one that cannot be faked: build a synthetic MEDS dataset with a
+*designed* signal, run this model's whole DAG over it, and assert the signal is learned — paired with a
+**negative control** on shuffled labels so the test cannot pass vacuously. A model that scores well on both
+has learned nothing; the pair is the point.
+
+This is DAG-independent: `run_chain` follows whatever `commands.py` registers, so the same test applies to
+a supervised model, a fine-tune, a probe and a zero-shot model alike.
+
+Deselected in the fast CI job (`-m "not slow"`); run it before you claim the model works.
 """
+import polars as pl
 import pytest
-{% if profile in ['supervised_basic', 'motor_finetune', 'probe', 'custom'] %}
-import polars as pl
+from meds_model_base.testing import assert_learns_signal, binary_auroc, build_signal_dataset, skip_if_stub
 
-from meds_model_base.commands import CommandName
-from meds_model_base.testing import assert_learns_signal, binary_auroc, build_signal_dataset
+from {{ model_slug }}.model import Model
 
-from {{ model_slug }}.commands import COMMANDS
-{% elif profile == 'every_query' %}
-import polars as pl
+from .conftest import build_workspace
 
-from meds_model_base.testing import SIGNAL_CODE, binary_auroc, build_signal_dataset
-{% endif %}
 pytestmark = pytest.mark.slow
 
-_TRAIN = [
-    "trainer.accelerator=cpu",
-    "batch_size=16",
-    "num_workers=0",
-    "do_overwrite=true",
-]
-{% if profile in ['supervised_basic', 'motor_finetune', 'probe', 'custom'] %}
 
-def _build_workspace(cli, tmp_path, raw):
-    """preprocess_data + preprocess_task over a synthetic dataset; return the shared data_dir."""
-    data_dir = tmp_path / "data"
-    cli([
-        "preprocess_data",
-        f"external_meds_dir={raw}",
-        f"output_data_dir={data_dir}",
-        "do_reshard=true",
-        "do_overwrite=true",
-    ])
-    cli([
-        "preprocess_task",
-        f"input_data_dir={data_dir}",
-        f"external_task_file={raw / 'task_labels' / 'signal_task'}",
-        "do_overwrite=true",
-    ])
-    return data_dir
-
-
-def _train_and_predict(cli, tmp_path, raw, epochs=25):
-    """Run this model's whole chain over a synthetic dataset; return (predictions, held_out_labels)."""
-    data_dir = _build_workspace(cli, tmp_path, raw)
-
-    pretrained_dir = None
-    if CommandName.pretrain in COMMANDS:
-        pretrained_dir = tmp_path / "pretrained"
-        cli([
-            "pretrain",
-            f"input_data_dir={data_dir}",
-            f"output_pretrained_model_dir={pretrained_dir}",
-            f"trainer.max_epochs={epochs}",
-            *_TRAIN,
-        ])
-
-    inference_subdir = None
-    if CommandName.infer in COMMANDS:
-        inference_subdir = "inference/embeddings"
-        cli([
-            "infer",
-            f"input_data_dir={data_dir}",
-            f"input_pretrained_model_dir={pretrained_dir}",
-            f"output_inference_subdir={inference_subdir}",
-            "batch_size=16",
-            "do_overwrite=true",
-        ])
-
-    supervised_dir = tmp_path / "supervised"
-    args = [
-        "supervised_train",
-        f"input_data_dir={data_dir}",
-        f"output_supervised_model_dir={supervised_dir}",
-        f"trainer.max_epochs={epochs}",
-        *_TRAIN,
-    ]
-    sources = COMMANDS[CommandName.supervised_train].supported_sources or frozenset()
-    if "input_inference_subdir" in sources and inference_subdir is not None:
-        args.append(f"input_inference_subdir={inference_subdir}")
-    elif "input_pretrained_model_dir" in sources and pretrained_dir is not None:
-        args.append(f"input_pretrained_model_dir={pretrained_dir}")
-    cli(args)
-
-    preds_dir = tmp_path / "predictions"
-    cli([
-        "predict",
-        f"input_data_dir={data_dir}",
-        f"input_supervised_model_dir={supervised_dir}",
-        f"output_predictions_dir={preds_dir}",
-        "splits=[held_out]",
-        "batch_size=16",
-        "do_overwrite=true",
-    ])
+def _predictions_for(chain, tmp_path, name: str, *, shuffle_labels: bool, seed: int):
+    """Build a synthetic dataset, run the DAG over it, and return (predictions, held-out labels)."""
+    raw = build_signal_dataset(tmp_path / f"raw_{name}", seed=seed, shuffle_labels=shuffle_labels)
+    data_dir = build_workspace(raw, raw / "task_labels" / "signal_task", tmp_path / f"data_{name}")
+    artifacts = chain(data_dir, tmp_path / f"out_{name}", epochs=25, batch_size=16)
+    assert "predictions" in artifacts, "this DAG does not register `predict`, so it cannot be evaluated"
     return (
-        pl.read_parquet(preds_dir / "predictions.parquet"),
+        pl.read_parquet(artifacts["predictions"] / "predictions.parquet"),
         pl.read_parquet(raw / "task_labels" / "signal_task" / "held_out.parquet"),
     )
 
 
-def test_learns_designed_signal(cli, tmp_path):
-    raw = build_signal_dataset(tmp_path / "raw", seed=0)
-    preds, held = _train_and_predict(cli, tmp_path, raw)
+def test_learns_designed_signal(chain, tmp_path):
+    skip_if_stub(Model)
+    preds, held = _predictions_for(chain, tmp_path, "signal", shuffle_labels=False, seed=0)
     auroc = assert_learns_signal(preds, held, min_auroc=0.75)
     assert auroc > 0.75
 
 
-def test_negative_control_does_not_learn(cli, tmp_path):
-    # Shuffled labels: the signal-label link is broken, so the model must NOT achieve high AUROC.
-    raw = build_signal_dataset(tmp_path / "raw_ctrl", seed=1, shuffle_labels=True)
-    preds, held = _train_and_predict(cli, tmp_path, raw)
+def test_negative_control_does_not_learn(chain, tmp_path):
+    """Shuffled labels break the signal-label link, so a sound model must NOT score well here."""
+    skip_if_stub(Model)
+    preds, held = _predictions_for(chain, tmp_path, "control", shuffle_labels=True, seed=1)
     joined = preds.join(held, on=["subject_id", "prediction_time"], how="inner")
     ctrl = binary_auroc(
         joined["boolean_value"].to_list(), joined["predicted_boolean_probability"].to_list()
     )
     assert ctrl <= 0.70, f"negative control learned a shuffled signal (AUROC={ctrl:.3f}); test is unsound"
-{% elif profile == 'every_query' %}
-
-def test_occurrence_head_learns_signal(cli, tmp_path):
-    """After query-pretraining, the occurrence probability of the signal code separates who has it."""
-    import torch
-    from meds_torchdata import MEDSPytorchDataset, MEDSTorchDataConfig
-    from meds_torchdata.types import SubsequenceSamplingStrategy
-
-    from meds_model_base.utils import require_checkpoint
-
-    from {{ model_slug }}.model import Model
-
-    raw = build_signal_dataset(tmp_path / "raw", seed=0)
-    data_dir = tmp_path / "data"
-    cli([
-        "preprocess_data",
-        f"external_meds_dir={raw}",
-        f"output_data_dir={data_dir}",
-        "do_reshard=true",
-        "do_overwrite=true",
-    ])
-    pretrained_dir = tmp_path / "pretrained"
-    cli([
-        "pretrain",
-        f"input_data_dir={data_dir}",
-        f"output_pretrained_model_dir={pretrained_dir}",
-        "trainer.max_epochs=25",
-        *_TRAIN,
-    ])
-
-    model = Model.load_from_checkpoint(require_checkpoint(pretrained_dir), map_location="cpu").eval()
-    patients = data_dir / "patients"
-    codes = pl.read_parquet(patients / "metadata" / "codes.parquet")
-    vocab = dict(zip(codes["code"].to_list(), codes["code/vocab_index"].to_list(), strict=False))
-    signal_idx = vocab[SIGNAL_CODE]
-
-    cfg = MEDSTorchDataConfig(
-        tensorized_cohort_dir=str(patients),
-        max_seq_len=64,
-        seq_sampling_strategy=SubsequenceSamplingStrategy.RANDOM,
-    )
-    ds = MEDSPytorchDataset(cfg, split="held_out")
-    scores, labels = [], []
-    with torch.no_grad():
-        for batch in ds.get_dataloader(batch_size=16, shuffle=False):
-            probs = model.predict_step(batch)["query_probs"]
-            scores += probs[:, signal_idx].tolist()
-            labels += (batch.code == signal_idx).any(dim=1).tolist()
-    auroc = binary_auroc(labels, scores)
-    assert auroc >= 0.75, f"query head failed to learn signal-code occurrence (AUROC={auroc:.3f})"
-{% elif profile == 'zero_shot_ar' %}
-
-def test_generation_is_in_grammar(cli, tmp_path):
-    """After LM pretraining on a fixed-program grammar, greedy generation stays in the code vocabulary."""
-    import torch
-    from meds_torchdata import MEDSPytorchDataset, MEDSTorchDataConfig
-    from meds_torchdata.types import SubsequenceSamplingStrategy
-
-    from meds_model_base.testing.synthetic import build_pattern_dataset
-    from meds_model_base.utils import require_checkpoint
-
-    from {{ model_slug }}.model import Model
-
-    raw = build_pattern_dataset(tmp_path / "raw", seed=0)
-    data_dir = tmp_path / "data"
-    cli([
-        "preprocess_data",
-        f"external_meds_dir={raw}",
-        f"output_data_dir={data_dir}",
-        "do_reshard=true",
-        "do_overwrite=true",
-    ])
-    pretrained_dir = tmp_path / "pretrained"
-    cli([
-        "pretrain",
-        f"input_data_dir={data_dir}",
-        f"output_pretrained_model_dir={pretrained_dir}",
-        "trainer.max_epochs=30",
-        "max_seq_len=64",
-        *_TRAIN,
-    ])
-
-    model = Model.load_from_checkpoint(require_checkpoint(pretrained_dir), map_location="cpu").eval()
-    cfg = MEDSTorchDataConfig(
-        tensorized_cohort_dir=str(data_dir / "patients"),
-        max_seq_len=32,
-        seq_sampling_strategy=SubsequenceSamplingStrategy.FROM_START,
-    )
-    ds = MEDSPytorchDataset(cfg, split="held_out")
-    batch = next(iter(ds.get_dataloader(batch_size=8, shuffle=False)))
-    with torch.no_grad():
-        generated = model.generate(batch.code[:, :4], max_new_tokens=16)
-
-    # Learnability: greedy continuations should be real (non-pad) vocab codes far more often than a random
-    # baseline (uniform over the vocab would be ~1/vocab_size per position).
-    new_tokens = generated[:, 4:]
-    valid_fraction = (new_tokens > 0).float().mean().item()
-    assert valid_fraction >= 0.9, f"AR generation produced too many pad tokens ({valid_fraction:.2f})"
-{% else %}
-
-def test_placeholder():
-    pytest.skip("No property test defined for this profile; add one for your model.")
-{% endif %}

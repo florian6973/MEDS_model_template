@@ -1,67 +1,70 @@
 # @package _global_
-# The {{ profile }} profile.
+# The {{ profile }} DAG.
 #
-# A profile is configuration, not a code path: every generated repository ships all six commands, and a
-# profile is just which of them are wired together and with which optional inputs. That makes the chain
-# below the whole of the profile's interface surface — there is nothing conditional in the command
-# implementations to keep in sync with it.
+# A profile is a *shape*, not a model: which commands run, and which artifact each one consumes. The model
+# itself is `src/{{ model_slug }}/model.py`, which the template leaves for you to write.
 #
-# Which commands this model *supports* is declared in `src/{{ model_slug }}/commands.py`, because the
-# dispatcher needs it before Hydra composes anything.
+# `chain` below is the authoritative description of this shape, and the template's render tests assert it
+# matches `commands.py` exactly — the two cannot drift.
 #
 # Loaded last in every command's defaults list, so anything set here wins over the generic defaults. Put
 # model-specific overrides here; leave the artifact sources unset (they are per-run, and a wrong default
-# would silently point a run at the wrong model).
+# would silently point a run at the wrong artifact).
 
 profile:
   name: {{ profile }}
-{% if profile == 'supervised_basic' %}  chain:
+{% if profile == 'supervised' %}  chain:
     - preprocess_data
     - preprocess_task
     - supervised_train
     - predict
   notes: >-
-    A task model trained from scratch on the tokenized cohort. `predict` takes
-    input_supervised_model_dir.
-{% elif profile == 'zero_shot_ar' %}  chain:
+    Train a task model from scratch on the tokenized cohort. `predict` takes input_supervised_model_dir.
+{% elif profile == 'finetune' %}  chain:
     - preprocess_data
     - pretrain
     - preprocess_task
-    - infer            # generates trajectories; optional if predict resolves in-process
+    - supervised_train
     - predict
   notes: >-
-    Autoregressive pretraining, then zero-shot scoring. `predict` takes input_pretrained_model_dir and
-    resolves the task over the model's own generations — implement `resolve` in model.py or subclass
-    ZeroShotPredictCommand.
-{% elif profile == 'every_query' %}  chain:
-    - preprocess_data
-    - pretrain
-    - preprocess_task
-    - predict
-  notes: >-
-    Query-conditioned pretraining. `predict` takes input_pretrained_model_dir and translates the task
-    definition (recovered from the task manifest) into a native code query.
-{% elif profile == 'motor_finetune' %}  chain:
-    - preprocess_data
-    - pretrain
-    - preprocess_task
-    - supervised_train  # with input_pretrained_model_dir
-    - predict
-  notes: >-
-    Time-to-event pretraining, then supervised fine-tuning. Pass input_pretrained_model_dir to
-    supervised_train; a warm start that matches no parameters is an error, not a silent from-scratch run.
+    Pretrain, then fine-tune for the task. Pass input_pretrained_model_dir to supervised_train; a warm
+    start that matches no parameters is an error, not a silent from-scratch run. Analogous to MOTOR.
 {% elif profile == 'probe' %}  chain:
     - preprocess_data
     - pretrain
     - preprocess_task
-    - infer             # materializes embeddings
-    - supervised_train  # with input_inference_subdir
+    - infer
+    - supervised_train
     - predict
   notes: >-
-    Frozen-representation probe. The foundation model is never re-run downstream: `supervised_train`
-    trains a small head on the materialized embeddings, and `predict` recovers which embeddings to score
-    from the probe's own manifest.
+    Frozen-representation probe. `infer` materializes embeddings once; `supervised_train` fits a head on
+    them via input_inference_subdir, and `predict` recovers which embeddings to score from the head's own
+    manifest. The foundation model is never re-run downstream.
+{% elif profile == 'zero_shot_direct' %}  chain:
+    - preprocess_data
+    - pretrain
+    - preprocess_task
+    - predict
+  notes: >-
+    Score a task straight from the pretrained model via input_pretrained_model_dir. Implement `resolve` in
+    predict.py to turn the task definition into probabilities. Analogous to EveryQuery.
+{% elif profile == 'zero_shot_materialized' %}  chain:
+    - preprocess_data
+    - pretrain
+    - preprocess_task
+    - infer
+    - predict
+  notes: >-
+    Score a task from artifacts `infer` already materialized (input_inference_subdir), so the model is not
+    re-run per task and its outputs stay inspectable. Analogous to MEDS-EIC-AR generating trajectories once.
+{% elif profile == 'packaged' %}  chain:
+    - preprocess_data
+    - preprocess_task
+    - predict
+  notes: >-
+    Weights ship with the repository, so there is nothing to train. `predict` runs with no source
+    artifact, which arbitration permits only because predict.py declares a packaged_model. PFN-style.
 {% else %}  chain: []
   notes: >-
-    Custom profile: wire the commands you need. See `meds-model commands` for what this model supports.
+    Custom DAG: wire the commands you need in commands.py. `meds-model commands` lists what is registered.
 {% endif %}

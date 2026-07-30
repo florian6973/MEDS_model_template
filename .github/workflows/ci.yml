@@ -16,29 +16,34 @@ jobs:
       - run: uv run ruff format --check .
       - run: uv run pytest tests/ -q
 
-  # Heavier check: render a profile, install it, and run its own smoke suite (real preprocess_data +
-  # training + predict on tiny meds-testing-helpers data). Proves a generated repo works end to end.
-  # `probe` is included because it is the only chain exercising infer -> supervised_train -> predict.
+  # Heavier check: render each DAG, install it, and run its own suite. A generated repo ships no model,
+  # so the model-dependent conformance tests skip — what this proves is that the package installs, the
+  # console script dispatches, every command's Hydra config composes, and the preprocessing half of the
+  # contract genuinely runs on real (tiny) MEDS data.
+  #
+  # It does NOT prove a chain trains and predicts end to end; nothing can, until someone writes a model.
+  # Closing that gap needs a reference implementation living outside the payload — see the note in
+  # CLAUDE.md.
   rendered-smoke:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        profile: [supervised_basic, probe]
+        profile: [supervised, probe, zero_shot_materialized, packaged]
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
-      - name: Render the ${{ matrix.profile }} profile
+      - name: Render the ${{ matrix.profile }} DAG
         run: |
           uvx copier copy --vcs-ref=HEAD --defaults --trust \
             --data model_slug=demo_model --data model_name="Demo Model" \
             --data profile=${{ matrix.profile }} . /tmp/demo_model
-      - name: Install torch (CPU) + run the generated repo's smoke tests
+      - name: Install torch (CPU) + run the generated repo's tests
         working-directory: /tmp/demo_model
         run: |
           uv venv
           uv pip install torch --index-url https://download.pytorch.org/whl/cpu
           uv pip install -e . --group dev
-          uv run pytest -m "not slow" -q
+          uv run pytest -m "not slow" -q -rs

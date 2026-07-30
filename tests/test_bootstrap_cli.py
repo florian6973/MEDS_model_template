@@ -32,7 +32,7 @@ def test_minimal_invocation():
 
 def test_profile_is_forwarded_as_copier_data():
     """The documented `--profile` form must actually work."""
-    cmd = invoke(["./my-model", "--profile", "zero_shot_ar", "--defaults"])
+    cmd = invoke(["./my-model", "--profile", "zero_shot_direct", "--defaults"])
     assert cmd == [
         "copier",
         "copy",
@@ -40,7 +40,7 @@ def test_profile_is_forwarded_as_copier_data():
         "./my-model",
         "--defaults",
         "--data",
-        "profile=zero_shot_ar",
+        "profile=zero_shot_direct",
     ]
 
 

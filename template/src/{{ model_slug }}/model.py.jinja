@@ -1,414 +1,128 @@
-"""The model — yours to own. Rendered once for the ``{{ profile }}`` profile, then never touched again.
+"""Your model. **This file is a stub — nothing here is implemented.**
 
-``copier update`` refreshes the vendored contract in ``meds_model_base`` but leaves this file alone, so
-edit it freely: change the encoder, add layers, swap the loss, rewrite it entirely. The commands only
-require that what comes out is a ``LightningModule`` implementing the hooks below.
+The template generates the *command DAG*, not the model: the ``{{ profile }}`` profile decides which
+commands run and how their artifacts connect, and this file is where you say what the model actually does.
+Every hook below raises until you write it.
 
-- ``compute_loss(batch) -> (loss, metrics)`` — training. Called by both training commands.
-- ``predict_step(batch) -> dict`` — task probabilities, consumed by ``predict``.
-- ``infer_step(batch) -> dict`` + ``inference_kind`` — reusable per-timepoint artifacts, consumed by
-  ``infer``. ``BaseLightningModule`` defaults these to the pooled representation from ``encode``.
+The DAG calls exactly these hooks, and nothing else:
+{% if profile != 'packaged' %}
+- ``compute_loss(batch) -> (loss, metrics)`` — used by {% if profile in ['finetune', 'probe', 'zero_shot_direct', 'zero_shot_materialized'] %}``pretrain``{% if profile in ['finetune', 'probe'] %} and ``supervised_train``{% endif %}{% else %}``supervised_train``{% endif %}.
+{% endif %}{% if profile in ['supervised', 'finetune'] %}- ``predict_step(batch) -> {"predicted_boolean_probability": [B]}`` — used by ``predict``.
+{% endif %}{% if profile == 'probe' %}- ``encode(batch) -> [B, D]`` — the representation ``infer`` materializes as embeddings.
+- ``Probe`` — the head ``supervised_train`` fits on those frozen embeddings, and ``predict`` scores with.
+{% endif %}{% if profile == 'zero_shot_materialized' %}- ``infer_step(batch) -> {"predicted_boolean_probability": [B]}`` with ``inference_kind = "scores"`` —
+  ``infer`` materializes these, and ``predict`` reads them back without re-running the model.
+{% endif %}{% if profile == 'zero_shot_direct' %}- ``predict_step(batch)`` and ``resolve(...)`` in ``predict.py`` — how a task is answered directly.
+{% endif %}{% if profile == 'packaged' %}- ``predict`` in ``predict.py`` — this profile ships its own weights, so there is nothing to train.
+{% endif %}
+Once you implement them, **delete the ``is_stub`` marker**. The conformance tests in ``tests/`` skip while
+it is set and start running when it is gone; they are the contract your model has to satisfy.
 
-``meds_model_base.lightning.modules`` supplies only the pieces that must know the MEDS batch format —
-``CodeEmbedder``, ``padding_mask``, ``masked_mean``. Everything else below is ordinary PyTorch.
+``meds_model_base.lightning.modules`` provides the pieces that must know the MEDS batch format —
+``CodeEmbedder``, ``padding_mask``, ``masked_mean``. Everything else is yours.
 """
 
 from collections.abc import Callable
 
 {% if profile == 'probe' %}import lightning.pytorch as L
-{% endif %}import torch
-import torch.nn.functional as F
-from meds_model_base.lightning.modules import (
-    PAD_INDEX,
-    BaseLightningModule,
-    CodeEmbedder,
-    masked_mean,
-    padding_mask,
-)
+{% endif %}from meds_model_base.lightning.modules import BaseLightningModule
 from meds_torchdata import MEDSTorchBatch
-from torch import Tensor, nn
-{% if profile == 'zero_shot_ar' %}
+from torch import Tensor
+{% if profile == 'packaged' %}
 
-class Model(BaseLightningModule):
-    """An autoregressive "everything-is-code" causal LM over MEDS token sequences.
+class Model:
+    """This profile ships trained weights with the repository, so there is no module to train.
 
-    Trained with next-code cross-entropy. ``infer`` materializes sampled futures as ``trajectories``; a
-    task is resolved over those futures in ``predict.py``.
-
-    Deliberately compact rather than performance-tuned: it generates codes only and does not special-case
-    EOS the way a production autoregressive model would.
-
-    Args:
-        vocab_size: code-vocabulary size (injected from ``datamodule.config.vocab_size``).
-        d_model, nhead, num_layers, dropout: Transformer size.
-        max_seq_len: maximum context length (for the learned positional embedding).
-        max_new_tokens: number of codes to generate per subject at inference.
-        optimizer / scheduler: Hydra ``_partial_`` factories.
+    Load them however you like — a checkpoint under ``src/{{ model_slug }}/weights/``, a package resource,
+    a download pinned by hash — and use them from ``PredictCommand.predict`` in ``predict.py``.
     """
 
-    inference_kind = "trajectories"
-
-    def __init__(
-        self,
-        vocab_size: int,
-        d_model: int = 128,
-        nhead: int = 4,
-        num_layers: int = 2,
-        dropout: float = 0.1,
-        max_seq_len: int = 256,
-        max_new_tokens: int = 32,
-        optimizer: Callable | None = None,
-        scheduler: Callable | None = None,
-    ) -> None:
-        super().__init__(optimizer=optimizer, scheduler=scheduler)
-        self.save_hyperparameters(ignore=["optimizer", "scheduler"])
-
-        self.vocab_size = vocab_size
-        self.max_new_tokens = max_new_tokens
-        self.embed = nn.Embedding(vocab_size, d_model, padding_idx=PAD_INDEX)
-        self.pos = nn.Embedding(max_seq_len, d_model)
-        layer = nn.TransformerEncoderLayer(
-            d_model, nhead, dim_feedforward=4 * d_model, dropout=dropout, batch_first=True, norm_first=True
-        )
-        self.blocks = nn.TransformerEncoder(layer, num_layers=num_layers)
-        self.ln = nn.LayerNorm(d_model)
-        self.lm_head = nn.Linear(d_model, vocab_size)
-
-    def _hidden(self, codes: Tensor) -> Tensor:
-        seq_len = codes.shape[1]
-        positions = torch.arange(seq_len, device=codes.device)
-        x = self.embed(codes) + self.pos(positions).unsqueeze(0)
-        causal = nn.Transformer.generate_square_subsequent_mask(seq_len, device=codes.device)
-        pad = codes == PAD_INDEX
-        return self.ln(self.blocks(x, mask=causal, src_key_padding_mask=pad, is_causal=True))
-
-    def forward(self, codes: Tensor) -> Tensor:
-        """Next-code logits ``[B, L, vocab_size]``."""
-        return self.lm_head(self._hidden(codes))
-
-    def compute_loss(self, batch: MEDSTorchBatch) -> tuple[Tensor, dict[str, Tensor]]:
-        codes = batch.code
-        logits = self(codes[:, :-1])
-        target = codes[:, 1:]
-        loss = F.cross_entropy(
-            logits.reshape(-1, self.vocab_size), target.reshape(-1), ignore_index=PAD_INDEX
-        )
-        return loss, {}
-
-    @torch.no_grad()
-    def generate(self, codes: Tensor, max_new_tokens: int, sample: bool = False) -> Tensor:
-        """Extend each row of ``codes`` by ``max_new_tokens`` (``[B, L] -> [B, L + T]``).
-
-        Sampling rather than greedy decoding is what makes a zero-shot *probability* meaningful: a greedy
-        trajectory can only ever answer 0 or 1.
-        """
-        max_ctx = self.pos.num_embeddings
-        for _ in range(max_new_tokens):
-            logits = self(codes[:, -max_ctx:])[:, -1]
-            if sample:
-                next_code = torch.multinomial(F.softmax(logits, dim=-1), num_samples=1)
-            else:
-                next_code = logits.argmax(dim=-1, keepdim=True)
-            codes = torch.cat([codes, next_code], dim=1)
-        return codes
-
-    def infer_step(self, batch: MEDSTorchBatch) -> dict[str, Tensor]:
-        """Generated futures, published as an inference artifact of kind ``trajectories``."""
-        return {"generated_codes": self.generate(batch.code, self.max_new_tokens).detach().cpu()}
-
-    def predict_step(self, batch: MEDSTorchBatch, batch_idx: int = 0) -> dict[str, Tensor]:
-        """Same generations as :meth:`infer_step`, for a ``predict`` that resolves a task in-process."""
-        return self.infer_step(batch)
-{% elif profile == 'every_query' %}
-
-class Model(BaseLightningModule):
-    """A query-conditioned pretrained model: an encoder plus a multi-label code-occurrence head.
-
-    Pretraining predicts which codes occur in a subject's timeline — a simplified proxy for EveryQuery's
-    "does code X occur within horizon" objective. At ``predict`` the task is translated into a code query
-    and that code's occurrence probability is read off (see ``predict.py``).
-
-    Args:
-        vocab_size: code-vocabulary size (injected from ``datamodule.config.vocab_size``).
-        d_model: hidden size.
-        num_layers: GRU depth.
-        dropout: GRU dropout (applies with more than one layer).
-        use_numeric_value: fold numeric values into the embedding.
-        optimizer / scheduler: Hydra ``_partial_`` factories.
-    """
-
-    #: `infer` materializes per-code occurrence probabilities, not embeddings.
-    inference_kind = "scores"
-
-    def __init__(
-        self,
-        vocab_size: int,
-        d_model: int = 64,
-        num_layers: int = 1,
-        dropout: float = 0.1,
-        use_numeric_value: bool = True,
-        optimizer: Callable | None = None,
-        scheduler: Callable | None = None,
-    ) -> None:
-        super().__init__(optimizer=optimizer, scheduler=scheduler)
-        self.save_hyperparameters(ignore=["optimizer", "scheduler"])
-
-        self.vocab_size = vocab_size
-        self.embedder = CodeEmbedder(vocab_size, d_model, use_numeric_value=use_numeric_value)
-        self.encoder = nn.GRU(
-            d_model,
-            d_model,
-            num_layers=num_layers,
-            batch_first=True,
-            dropout=dropout if num_layers > 1 else 0.0,
-        )
-        self.query_head = nn.Linear(d_model, vocab_size)  # per-code occurrence logits
-
-    def encode(self, batch: MEDSTorchBatch) -> Tensor:
-        """Pooled ``[B, d_model]`` subject representation."""
-        mask = padding_mask(batch)
-        hidden, _ = self.encoder(self.embedder(batch))
-        return masked_mean(hidden, mask)
-
-    def occurrence_logits(self, batch: MEDSTorchBatch) -> Tensor:
-        """Per-code occurrence logits ``[B, vocab_size]``."""
-        return self.query_head(self.encode(batch))
-
-    def compute_loss(self, batch: MEDSTorchBatch) -> tuple[Tensor, dict[str, Tensor]]:
-        logits = self.occurrence_logits(batch)
-        target = _multi_hot(batch.code, self.vocab_size)
-        return F.binary_cross_entropy_with_logits(logits, target), {}
-
-    def infer_step(self, batch: MEDSTorchBatch) -> dict[str, Tensor]:
-        """The full occurrence-probability vector, so any code can be queried later."""
-        return {"query_probs": torch.sigmoid(self.occurrence_logits(batch)).detach().cpu()}
-
-    def predict_step(self, batch: MEDSTorchBatch, batch_idx: int = 0) -> dict[str, Tensor]:
-        """Per-code occurrence probabilities ``[B, vocab_size]`` — query any code downstream."""
-        return self.infer_step(batch)
-
-
-def _multi_hot(codes: Tensor, vocab_size: int) -> Tensor:
-    """Build a ``[B, vocab_size]`` multi-hot of which (non-pad) codes appear in each row of ``codes``."""
-    target = torch.zeros(codes.shape[0], vocab_size, device=codes.device)
-    target.scatter_(1, codes.clamp(min=0), 1.0)
-    target[:, PAD_INDEX] = 0.0
-    return target
-{% elif profile == 'motor_finetune' %}
-
-class Model(BaseLightningModule):
-    """A MOTOR-style model: one module, two objectives, selected by whether the batch carries labels.
-
-    - **``pretrain`` (no labels)** — time-to-event: from each position's contextual state, predict the gap
-      to the next measurement under an exponential hazard (NLL). This teaches the encoder the temporal
-      structure of a timeline, which is the essence of MOTOR.
-    - **``supervised_train`` (labels present)** — a classification head on the pooled representation,
-      warm-started from the pretrained encoder. The embedder and encoder transfer; the head is fresh.
-
-    A warm start that matches no parameters raises rather than silently training from scratch, so a
-    renamed encoder is a loud failure instead of a quietly different experiment.
-
-    Args:
-        vocab_size: code-vocabulary size (injected from ``datamodule.config.vocab_size``).
-        d_model: hidden size.
-        num_layers: GRU depth.
-        dropout: GRU dropout (applies with more than one layer).
-        use_numeric_value: fold numeric values into the embedding.
-        threshold: probability threshold for the optional ``predicted_boolean_value`` column.
-        optimizer / scheduler: Hydra ``_partial_`` factories.
-    """
-
-    def __init__(
-        self,
-        vocab_size: int,
-        d_model: int = 64,
-        num_layers: int = 1,
-        dropout: float = 0.1,
-        use_numeric_value: bool = True,
-        threshold: float = 0.5,
-        optimizer: Callable | None = None,
-        scheduler: Callable | None = None,
-    ) -> None:
-        super().__init__(optimizer=optimizer, scheduler=scheduler)
-        self.save_hyperparameters(ignore=["optimizer", "scheduler"])
-
-        self.embedder = CodeEmbedder(vocab_size, d_model, use_numeric_value=use_numeric_value)
-        self.encoder = nn.GRU(
-            d_model,
-            d_model,
-            num_layers=num_layers,
-            batch_first=True,
-            dropout=dropout if num_layers > 1 else 0.0,
-        )
-        self.tte_head = nn.Linear(d_model, 1)  # log-rate of an exponential time-to-next-event
-        self.cls_head = nn.Linear(d_model, 1)  # supervised classification
-        self.threshold = threshold
-
-    def _sequence(self, batch: MEDSTorchBatch) -> Tensor:
-        hidden, _ = self.encoder(self.embedder(batch))
-        return hidden
-
-    def encode(self, batch: MEDSTorchBatch) -> Tensor:
-        """Pooled subject representation — also what ``infer`` materializes as embeddings."""
-        return masked_mean(self._sequence(batch), padding_mask(batch))
-
-    def compute_loss(self, batch: MEDSTorchBatch) -> tuple[Tensor, dict[str, Tensor]]:
-        if batch.has_labels:
-            logits = self.cls_head(self.encode(batch)).squeeze(-1)
-            target = batch.boolean_value.to(logits.dtype)
-            loss = F.binary_cross_entropy_with_logits(logits, target)
-            with torch.no_grad():
-                acc = ((logits > 0).to(target.dtype) == target).float().mean()
-            return loss, {"acc": acc, "mode_classify": torch.ones((), device=loss.device)}
-
-        # Time-to-event pretraining: predict the gap to the next measurement (exponential NLL).
-        hidden = self._sequence(batch)
-        rate = F.softplus(self.tte_head(hidden[:, :-1]).squeeze(-1)) + 1e-4
-        # log1p-compress the day-scale gaps so the exponential NLL stays well-conditioned across the wide
-        # dynamic range of inter-event times (minutes to years).
-        target_dt = torch.log1p(torch.clamp(torch.nan_to_num(batch.time_delta_days[:, 1:]), min=0.0))
-        mask = padding_mask(batch)[:, 1:].to(rate.dtype)
-        nll = (-torch.log(rate) + rate * target_dt) * mask
-        loss = nll.sum() / mask.sum().clamp(min=1.0)
-        return loss, {"mode_tte": torch.ones((), device=loss.device)}
-
-    def predict_step(self, batch: MEDSTorchBatch, batch_idx: int = 0) -> dict[str, Tensor]:
-        probs = torch.sigmoid(self.cls_head(self.encode(batch)).squeeze(-1))
-        return {
-            "predicted_boolean_probability": probs.detach().cpu(),
-            "predicted_boolean_value": (probs > self.threshold).detach().cpu(),
-        }
+    #: Delete this once the model is real; the conformance tests skip while it is set.
+    is_stub = True
 {% else %}
 
 class Model(BaseLightningModule):
-    """A binary classifier over MEDS sequences: embed, encode with a GRU, mean-pool, apply a head.
+    """The model trained by this DAG. Replace every ``NotImplementedError`` below.
 
-    Trained with binary cross-entropy on ``batch.boolean_value``; at ``predict`` it emits
-    ``sigmoid(logit)`` as ``predicted_boolean_probability``.
-{% if profile == 'probe' %}
-    In this profile it is also the *foundation* model: ``pretrain`` fits it and ``infer`` materializes
-    ``encode(batch)`` as embeddings, which :class:`Probe` below is then trained on.
-{% endif %}
-    Args:
-        vocab_size: code-vocabulary size (injected from ``datamodule.config.vocab_size``).
-        d_model: hidden size.
-        num_layers: GRU depth.
-        dropout: GRU dropout (applies with more than one layer).
-        use_numeric_value: fold numeric values into the embedding.
-        threshold: probability threshold for the optional ``predicted_boolean_value`` column.
-        optimizer / scheduler: Hydra ``_partial_`` factories.
+    Constructor arguments come from ``configs/model/default.yaml`` via Hydra, plus ``vocab_size``, which
+    the training commands inject from ``datamodule.config.vocab_size``. Add whatever else you need to both.
     """
 
+    #: Delete this once the model is real; the conformance tests skip while it is set.
+    is_stub = True
+{% if profile == 'zero_shot_materialized' %}
+    #: `infer` materializes task scores rather than embeddings, so `predict` can read them back directly.
+    inference_kind = "scores"
+{% endif %}
     def __init__(
         self,
         vocab_size: int,
-        d_model: int = 64,
-        num_layers: int = 1,
-        dropout: float = 0.1,
-        use_numeric_value: bool = True,
-        threshold: float = 0.5,
         optimizer: Callable | None = None,
         scheduler: Callable | None = None,
     ) -> None:
         super().__init__(optimizer=optimizer, scheduler=scheduler)
         self.save_hyperparameters(ignore=["optimizer", "scheduler"])
-
-        self.embedder = CodeEmbedder(vocab_size, d_model, use_numeric_value=use_numeric_value)
-        self.encoder = nn.GRU(
-            d_model,
-            d_model,
-            num_layers=num_layers,
-            batch_first=True,
-            dropout=dropout if num_layers > 1 else 0.0,
-        )
-        self.head = nn.Linear(d_model, 1)
-        self.threshold = threshold
-
-    def encode(self, batch: MEDSTorchBatch) -> Tensor:
-        """Pool a batch to a ``[B, d_model]`` subject representation at the prediction time."""
-        mask = padding_mask(batch)
-        hidden, _ = self.encoder(self.embedder(batch))
-        return masked_mean(hidden, mask)
-
-    def forward(self, batch: MEDSTorchBatch) -> Tensor:
-        """Return per-subject logits ``[B]``."""
-        return self.head(self.encode(batch)).squeeze(-1)
+        self.vocab_size = vocab_size
 
     def compute_loss(self, batch: MEDSTorchBatch) -> tuple[Tensor, dict[str, Tensor]]:
-        logits = self(batch)
-        target = batch.boolean_value.to(logits.dtype)
-        loss = F.binary_cross_entropy_with_logits(logits, target)
-        with torch.no_grad():
-            acc = ((logits > 0).to(target.dtype) == target).float().mean()
-        return loss, {"acc": acc}
+        """Return ``(loss, metrics)`` for a training batch.
+{% if profile in ['finetune', 'probe'] %}
+        This DAG trains twice. ``batch.has_labels`` distinguishes them: pretraining sees no labels, while
+        ``supervised_train`` sees ``batch.boolean_value``.
+{% endif %}        """
+        raise NotImplementedError("Implement compute_loss in src/{{ model_slug }}/model.py.")
+{% if profile == 'probe' %}
+    def encode(self, batch: MEDSTorchBatch) -> Tensor:
+        """Return a ``[B, D]`` representation per prediction timepoint.
 
+        ``infer`` materializes this as the ``embedding`` column; ``Probe`` is then trained on it. Nothing
+        downstream re-runs this model, so whatever you return here is the whole interface to the probe.
+        """
+        raise NotImplementedError("Implement encode in src/{{ model_slug }}/model.py.")
+{% elif profile == 'zero_shot_materialized' %}
+    def infer_step(self, batch: MEDSTorchBatch) -> dict[str, Tensor]:
+        """Return ``{"predicted_boolean_probability": [B]}`` — the task scores ``infer`` materializes.
+
+        ``predict`` reads these back from the artifact instead of re-running the model, so the scores stay
+        inspectable and reusable.
+        """
+        raise NotImplementedError("Implement infer_step in src/{{ model_slug }}/model.py.")
+{% else %}
     def predict_step(self, batch: MEDSTorchBatch, batch_idx: int = 0) -> dict[str, Tensor]:
-        """Return per-subject probabilities (aligned to the dataloader's sample order)."""
-        probs = torch.sigmoid(self(batch))
-        return {
-            "predicted_boolean_probability": probs.detach().cpu(),
-            "predicted_boolean_value": (probs > self.threshold).detach().cpu(),
-        }
-{% endif %}{% if profile == 'probe' %}
+        """Return ``{"predicted_boolean_probability": [B]}`` aligned to the dataloader's sample order.
+
+        Optionally add ``predicted_boolean_value``. ``predict`` validates the result against
+        ``meds_evaluation.PredictionSchema`` and checks that every index timepoint was scored.
+        """
+        raise NotImplementedError("Implement predict_step in src/{{ model_slug }}/model.py.")
+{% endif %}{% endif %}{% if profile == 'probe' %}
 
 class Probe(L.LightningModule):
-    """A small head trained on frozen embeddings materialized by ``infer``.
+    """The head trained on frozen embeddings, and the thing ``predict`` actually scores with.
 
-    Deliberately small: a probe measures what a representation already contains, so capacity here is a
-    confound rather than a feature. ``supervised_train`` builds it through ``cfg.model`` (select it with
-    ``model=probe``) and injects ``input_dim`` from the materialized embedding width.
+    ``supervised_train`` builds this through ``configs/model/probe.yaml`` and injects ``input_dim`` from
+    the width of the materialized embeddings. Batches are plain ``(features, labels)`` tensors — no MEDS
+    batch, no tokenization.
 
-    Args:
-        input_dim: embedding dimensionality (injected at build time).
-        hidden_size: 0 for a linear probe, else the width of a single hidden layer.
-        dropout: dropout applied before the head.
-        lr: AdamW learning rate.
-        threshold: probability threshold for the optional ``predicted_boolean_value`` column.
+    Keep it small: a probe measures what the representation already contains, so capacity here is a
+    confound rather than a feature.
     """
 
-    def __init__(
-        self,
-        input_dim: int,
-        hidden_size: int = 0,
-        dropout: float = 0.0,
-        lr: float = 1e-3,
-        threshold: float = 0.5,
-    ) -> None:
+    #: Delete this once the probe is real; the conformance tests skip while it is set.
+    is_stub = True
+
+    def __init__(self, input_dim: int) -> None:
         super().__init__()
         self.save_hyperparameters()
-        layers: list[nn.Module] = []
-        if dropout:
-            layers.append(nn.Dropout(dropout))
-        if hidden_size:
-            layers += [nn.Linear(input_dim, hidden_size), nn.ReLU(), nn.Linear(hidden_size, 1)]
-        else:
-            layers.append(nn.Linear(input_dim, 1))
-        self.net = nn.Sequential(*layers)
-        self.threshold = threshold
+        self.input_dim = input_dim
 
     def forward(self, x: Tensor) -> Tensor:
-        return self.net(x).squeeze(-1)
-
-    def _step(self, batch: tuple[Tensor, Tensor], stage: str) -> Tensor:
-        x, y = batch
-        loss = F.binary_cross_entropy_with_logits(self(x), y)
-        self.log(f"{stage}/loss", loss, prog_bar=True, batch_size=x.shape[0], sync_dist=stage == "val")
-        return loss
+        """Return ``[B]`` logits for a ``[B, input_dim]`` batch of embeddings."""
+        raise NotImplementedError("Implement Probe.forward in src/{{ model_slug }}/model.py.")
 
     def training_step(self, batch, batch_idx: int) -> Tensor:
-        return self._step(batch, "train")
-
-    def validation_step(self, batch, batch_idx: int) -> Tensor:
-        return self._step(batch, "val")
-
-    def predict_step(self, batch, batch_idx: int = 0) -> dict[str, Tensor]:
-        x = batch[0] if isinstance(batch, list | tuple) else batch
-        probs = torch.sigmoid(self(x))
-        return {
-            "predicted_boolean_probability": probs.detach().cpu(),
-            "predicted_boolean_value": (probs > self.threshold).detach().cpu(),
-        }
+        raise NotImplementedError("Implement Probe.training_step in src/{{ model_slug }}/model.py.")
 
     def configure_optimizers(self):
-        return torch.optim.AdamW(self.parameters(), lr=self.hparams.lr)
+        raise NotImplementedError("Implement Probe.configure_optimizers in src/{{ model_slug }}/model.py.")
 {% endif %}

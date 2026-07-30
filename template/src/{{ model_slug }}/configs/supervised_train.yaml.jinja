@@ -5,7 +5,7 @@
 defaults:
   - paths: default
   - datamodule: task
-{% if profile == 'probe' %}  # This profile trains a head on frozen embeddings, so `model` here is the probe, not the encoder.
+{% if profile == 'probe' %}  # This DAG trains a head on frozen embeddings, so `model` here is the probe, not the encoder.
   - model: probe
 {% else %}  - model: default
 {% endif %}  - trainer: default

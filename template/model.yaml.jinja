@@ -1,4 +1,4 @@
-## MEDS-DEV model specification for {{ model_name }}.
+## MEDS-DEV model specification for {{ model_name }} (the {{ profile }} DAG).
 ##
 ## MEDS-DEV runs each command string in an isolated environment (built from `requirements.txt`) and fills
 ## the {curly} placeholders. Only `supervised.predict` is mandatory.
@@ -20,14 +20,14 @@ metadata:
   requirements: requirements.txt
 
 commands:
-{% if profile == 'supervised_basic' %}  supervised:
+{% if profile == 'supervised' %}  supervised:
     train: |-
       meds-model preprocess_data external_meds_dir={dataset_dir} output_data_dir={output_dir}/data do_overwrite=true
       meds-model preprocess_task input_data_dir={output_dir}/data external_task_file={labels_dir} do_overwrite=true
       meds-model supervised_train input_data_dir={output_dir}/data output_supervised_model_dir={output_dir}/model
     predict: |-
       meds-model predict input_data_dir={model_initialization_dir}/data input_supervised_model_dir={model_initialization_dir}/model splits=[{split}] output_predictions_dir={output_dir} do_overwrite=true
-{% elif profile == 'motor_finetune' %}  unsupervised:
+{% elif profile == 'finetune' %}  unsupervised:
     train: |-
       meds-model preprocess_data external_meds_dir={dataset_dir} output_data_dir={output_dir}/data do_overwrite=true
       meds-model pretrain input_data_dir={output_dir}/data output_pretrained_model_dir={output_dir}/pretrained
@@ -48,6 +48,20 @@ commands:
       meds-model supervised_train input_data_dir={model_initialization_dir}/data input_inference_subdir=inference/embeddings output_supervised_model_dir={output_dir}/model
     predict: |-
       meds-model predict input_data_dir={model_initialization_dir}/data input_supervised_model_dir={model_initialization_dir}/model splits=[{split}] output_predictions_dir={output_dir} do_overwrite=true
+{% elif profile == 'zero_shot_materialized' %}  unsupervised:
+    train: |-
+      meds-model preprocess_data external_meds_dir={dataset_dir} output_data_dir={output_dir}/data do_overwrite=true
+      meds-model pretrain input_data_dir={output_dir}/data output_pretrained_model_dir={output_dir}/pretrained
+  supervised:
+    predict: |-
+      meds-model preprocess_task input_data_dir={model_initialization_dir}/data external_task_file={labels_dir} do_overwrite=true
+      meds-model infer input_data_dir={model_initialization_dir}/data input_pretrained_model_dir={model_initialization_dir}/pretrained do_overwrite=true
+      meds-model predict input_data_dir={model_initialization_dir}/data input_inference_subdir=inference/embeddings splits=[{split}] output_predictions_dir={output_dir} do_overwrite=true
+{% elif profile == 'packaged' %}  supervised:
+    predict: |-
+      meds-model preprocess_data external_meds_dir={dataset_dir} output_data_dir={output_dir}/data do_overwrite=true
+      meds-model preprocess_task input_data_dir={output_dir}/data external_task_file={labels_dir} do_overwrite=true
+      meds-model predict input_data_dir={output_dir}/data splits=[{split}] output_predictions_dir={output_dir} do_overwrite=true
 {% else %}  unsupervised:
     train: |-
       meds-model preprocess_data external_meds_dir={dataset_dir} output_data_dir={output_dir}/data do_overwrite=true

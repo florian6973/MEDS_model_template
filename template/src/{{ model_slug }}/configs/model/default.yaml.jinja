@@ -1,20 +1,8 @@
-# Your model's hyperparameters. `_target_` points at the class in src/{{ model_slug }}/model.py, which is
-# yours to change — add arguments here as you add them there.
+# Your model's constructor arguments. `_target_` points at the class in src/{{ model_slug }}/model.py.
+#
+# The stub takes only what the commands inject, so this is nearly empty on purpose: add an entry here for
+# every argument you add there, and override any of them on the command line
+# (`meds-model {% if profile in ['supervised', 'finetune', 'probe'] %}supervised_train{% else %}pretrain{% endif %} model.your_arg=...`).
 _target_: {{ model_slug }}.model.Model
-{% if profile == 'zero_shot_ar' %}d_model: 128
-nhead: 4
-num_layers: 2
-dropout: 0.1
-max_seq_len: ${max_seq_len}
-max_new_tokens: 64
-{% elif profile == 'every_query' %}d_model: 64
-num_layers: 1
-dropout: 0.1
-use_numeric_value: true
-{% else %}d_model: 64
-num_layers: 1
-dropout: 0.1
-use_numeric_value: true
-threshold: 0.5
-{% endif %}optimizer: ${optimizer}
+optimizer: ${optimizer}
 scheduler: null

@@ -1,7 +1,4 @@
-# The probe head trained on frozen embeddings. Selected by supervised_train (`model: probe`), which
-# injects `input_dim` from the width of the materialized embeddings.
+# The head trained on frozen embeddings. Selected by supervised_train (`model: probe`), which injects
+# `input_dim` from the width of the materialized embeddings. Add your own arguments as you add them to
+# `Probe` in src/{{ model_slug }}/model.py.
 _target_: {{ model_slug }}.model.Probe
-hidden_size: 0      # 0 == a linear probe; set a width for one hidden layer
-dropout: 0.0
-lr: 0.001
-threshold: 0.5

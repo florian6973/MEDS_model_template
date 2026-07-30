@@ -33,23 +33,12 @@ directory that finished.
 ## Usage
 
 ```bash
-{% if profile == 'supervised_basic' %}meds-model preprocess_data  external_meds_dir=$MEDS_ROOT output_data_dir=runs/data
+{% if profile == 'supervised' %}meds-model preprocess_data  external_meds_dir=$MEDS_ROOT output_data_dir=runs/data
 meds-model preprocess_task  input_data_dir=runs/data external_task_file=$TASK
 meds-model supervised_train input_data_dir=runs/data output_supervised_model_dir=runs/models/supervised
 meds-model predict          input_data_dir=runs/data input_supervised_model_dir=runs/models/supervised \
                             output_predictions_dir=runs/predictions
-{% elif profile == 'zero_shot_ar' %}meds-model preprocess_data external_meds_dir=$MEDS_ROOT output_data_dir=runs/data
-meds-model pretrain        input_data_dir=runs/data output_pretrained_model_dir=runs/models/pretrained
-meds-model preprocess_task input_data_dir=runs/data external_task_file=$ACES_YAML
-meds-model infer           input_data_dir=runs/data input_pretrained_model_dir=runs/models/pretrained
-meds-model predict         input_data_dir=runs/data input_pretrained_model_dir=runs/models/pretrained \
-                           output_predictions_dir=runs/predictions
-{% elif profile == 'every_query' %}meds-model preprocess_data external_meds_dir=$MEDS_ROOT output_data_dir=runs/data
-meds-model pretrain        input_data_dir=runs/data output_pretrained_model_dir=runs/models/pretrained
-meds-model preprocess_task input_data_dir=runs/data external_task_file=$ACES_YAML
-meds-model predict         input_data_dir=runs/data input_pretrained_model_dir=runs/models/pretrained \
-                           output_predictions_dir=runs/predictions
-{% elif profile == 'motor_finetune' %}meds-model preprocess_data  external_meds_dir=$MEDS_ROOT output_data_dir=runs/data
+{% elif profile == 'finetune' %}meds-model preprocess_data  external_meds_dir=$MEDS_ROOT output_data_dir=runs/data
 meds-model pretrain         input_data_dir=runs/data output_pretrained_model_dir=runs/models/pretrained
 meds-model preprocess_task  input_data_dir=runs/data external_task_file=$TASK
 meds-model supervised_train input_data_dir=runs/data input_pretrained_model_dir=runs/models/pretrained \
@@ -64,6 +53,20 @@ meds-model supervised_train input_data_dir=runs/data input_inference_subdir=infe
                             output_supervised_model_dir=runs/models/supervised
 meds-model predict          input_data_dir=runs/data input_supervised_model_dir=runs/models/supervised \
                             output_predictions_dir=runs/predictions
+{% elif profile == 'zero_shot_direct' %}meds-model preprocess_data external_meds_dir=$MEDS_ROOT output_data_dir=runs/data
+meds-model pretrain        input_data_dir=runs/data output_pretrained_model_dir=runs/models/pretrained
+meds-model preprocess_task input_data_dir=runs/data external_task_file=$ACES_YAML
+meds-model predict         input_data_dir=runs/data input_pretrained_model_dir=runs/models/pretrained \
+                           output_predictions_dir=runs/predictions
+{% elif profile == 'zero_shot_materialized' %}meds-model preprocess_data external_meds_dir=$MEDS_ROOT output_data_dir=runs/data
+meds-model pretrain        input_data_dir=runs/data output_pretrained_model_dir=runs/models/pretrained
+meds-model preprocess_task input_data_dir=runs/data external_task_file=$ACES_YAML
+meds-model infer           input_data_dir=runs/data input_pretrained_model_dir=runs/models/pretrained
+meds-model predict         input_data_dir=runs/data input_inference_subdir=inference/embeddings \
+                           output_predictions_dir=runs/predictions
+{% elif profile == 'packaged' %}meds-model preprocess_data external_meds_dir=$MEDS_ROOT output_data_dir=runs/data
+meds-model preprocess_task input_data_dir=runs/data external_task_file=$TASK
+meds-model predict         input_data_dir=runs/data output_predictions_dir=runs/predictions
 {% else %}meds-model preprocess_data external_meds_dir=$MEDS_ROOT output_data_dir=runs/data
 meds-model preprocess_task input_data_dir=runs/data external_task_file=$TASK
 # ... then the commands listed by `meds-model commands`
@@ -89,20 +92,27 @@ probabilities — it never reads ground-truth labels, and evaluation is a separa
 
 ## Editing
 
-- **`src/{{ model_slug }}/model.py`** — the model itself, rendered in full for this profile. It is not a
-  subclass of anything vendored, so change the encoder, the loss, the architecture — all of it is here.
-{% if profile in ['zero_shot_ar', 'every_query'] %}- **`src/{{ model_slug }}/predict.py`** — how this model resolves a task into probabilities.
+**Start here: `src/{{ model_slug }}/model.py` is a stub.** The template generated the command DAG, not the
+model — every hook in it raises `NotImplementedError` until you write it, and the docstring lists exactly
+which hooks this DAG calls. Delete the `is_stub` marker when you are done.
+
+{% if profile in ['zero_shot_direct', 'packaged'] %}- **`src/{{ model_slug }}/predict.py`** — also a stub: how this model answers a task.
 {% endif %}- **`src/{{ model_slug }}/commands.py`** — which commands this model supports.
-- **`src/{{ model_slug }}/configs/`** — `model/` hyperparameters, `paths/` locations, `profile/` wiring.
+- **`src/{{ model_slug }}/configs/`** — `model/` constructor arguments, `paths/` locations, `profile/` the DAG.
 - **`src/meds_model_base/`** — the vendored contract (managed by `copier update`; don't edit). It holds
   the command graph, manifests, schemas and a small MEDS-batch adapter layer — no models.
 
 ## Testing
 
 ```bash
-uv run pytest -m "not slow"    # CLI + end-to-end pipeline smoke tests
-uv run pytest -m slow          # synthetic-signal learnability property test
+uv run pytest -m "not slow"    # CLI smoke + the end-to-end conformance test
+uv run pytest -m slow          # designed-signal learnability, with a negative control
 ```
+
+The tests that need a working model **skip while `model.py` is a stub**, naming what to implement. They are
+not scaffolding to delete — they are the contract your model has to satisfy, and they start running the
+moment you remove the `is_stub` marker. A fresh repository is therefore green but honest: the CLI, config
+composition and dispatcher are genuinely tested; the model is not yet there to test.
 
 ## Updating the template
 

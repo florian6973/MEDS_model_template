@@ -102,34 +102,35 @@ python_version:
 
 profile:
   type: str
-  help: "Which chain of commands this model uses (see docs: every model ships all six)"
+  help: "Which DAG of commands this model implements (the model itself is yours to write)"
   choices:
-    "supervised-basic — preprocess_data, preprocess_task, supervised_train, predict": "supervised_basic"
-    "zero-shot autoregressive — pretrain, infer trajectories, zero-shot predict (like MEDS-EIC-AR)": "zero_shot_ar"
-    "every-query — query-conditioned pretraining, predict by native query": "every_query"
-    "MOTOR-style fine-tune — time-to-event pretrain, then supervised fine-tune": "motor_finetune"
-    "frozen probe — pretrain, infer embeddings, train a head on them": "probe"
+    "supervised — preprocess_data, preprocess_task, supervised_train, predict": "supervised"
+    "finetune — pretrain, then supervised_train from the pretrained model": "finetune"
+    "probe — pretrain, infer embeddings, train a head on the frozen features": "probe"
+    "zero_shot_direct — pretrain, then score a task straight from the model": "zero_shot_direct"
+    "zero_shot_materialized — pretrain, infer scores, then score a task from those artifacts": "zero_shot_materialized"
+    "packaged — weights ship with the repo; predict only (PFN-style)": "packaged"
     "custom — choose each command yourself": "custom"
-  default: "supervised_basic"
+  default: "supervised"
 
 # Command toggles, only *asked* for the custom profile. `preprocess_data` and `preprocess_task` are always
 # supported: every chain starts by materializing patient data and a task.
 implements_pretrain:
   type: bool
   help: "Support the `pretrain` command (foundation-model pretraining)?"
-  default: "{{ profile in ['zero_shot_ar', 'every_query', 'motor_finetune', 'probe'] }}"
+  default: "{{ profile in ['finetune', 'probe', 'zero_shot_direct', 'zero_shot_materialized'] }}"
   when: "{{ profile == 'custom' }}"
 
 implements_infer:
   type: bool
   help: "Support the `infer` command (materialize embeddings / trajectories / scores)?"
-  default: "{{ profile in ['zero_shot_ar', 'probe'] }}"
+  default: "{{ profile in ['probe', 'zero_shot_materialized'] }}"
   when: "{{ profile == 'custom' }}"
 
 implements_supervised_train:
   type: bool
   help: "Support the `supervised_train` command?"
-  default: "{{ profile in ['supervised_basic', 'motor_finetune', 'probe'] }}"
+  default: "{{ profile in ['supervised', 'finetune', 'probe'] }}"
   when: "{{ profile == 'custom' }}"
 
 implements_predict:

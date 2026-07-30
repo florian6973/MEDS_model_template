@@ -1,0 +1,51 @@
+"""How this model answers a task. **This file is a stub — nothing here is implemented.**
+{% if profile == 'zero_shot_direct' %}
+``PredictCommand`` leaves ``resolve`` abstract on purpose: turning a task definition into probabilities
+over a model's *own* outputs is model-specific, and a default returning a constant would produce a
+schema-valid predictions file of pure noise that every downstream check would pass.
+
+The task *definition* is recovered from the task artifact's manifest — ``predict`` takes no separate task
+argument, so it cannot be handed a definition that disagrees with the materialized labels. Use
+``task_definition_path(task_dir)`` to reach it and ``load_task_config`` to parse it.
+{% else %}
+This profile ships its own weights, so ``predict`` is the only command that runs. Arbitration lets it run
+with no input artifact solely because ``packaged_model`` is set below; the identifier is recorded in the
+predictions manifest so a scored file can always be traced back to the weights that produced it.
+{% endif %}
+Everything around this is fixed by the contract: the index is loaded without ground truth, coverage over
+the requested splits is enforced, and the output is validated against ``PredictionSchema`` before being
+published. You supply the probabilities and nothing else.
+"""
+
+import polars as pl
+{% if profile == 'zero_shot_direct' %}from meds_model_base.commands.predict import ZeroShotPredictCommand
+
+
+class PredictCommand(ZeroShotPredictCommand):
+    """Score a task directly from the pretrained model."""
+
+    def resolve(self, cfg, module, index: pl.DataFrame) -> pl.DataFrame:
+        """Return one row per row of ``index``, with ``subject_id``, ``prediction_time`` and
+        ``predicted_boolean_probability``.
+
+        ``index`` carries a ``split`` column; keep it and ``predict`` uses it directly for the coverage
+        report, or drop it and coverage is computed by joining on the two keys instead.
+        """
+        raise NotImplementedError("Implement resolve in src/{{ model_slug }}/predict.py.")
+{% else %}from meds_model_base.commands.predict import PackagedPredictCommand
+
+
+class PredictCommand(PackagedPredictCommand):
+    """Score a task with the weights shipped in this repository."""
+
+    #: Identifies the shipped weights in the predictions manifest. Make it specific (name + version).
+    packaged_model = "{{ model_slug }}-unversioned"
+
+    def predict(self, cfg, source, index: pl.DataFrame) -> pl.DataFrame:
+        """Return one row per row of ``index``, with a ``predicted_boolean_probability`` column.
+
+        ``source`` is ``(None, None)`` here — that is what ``packaged_model`` buys. Load your weights from
+        wherever they live in the package and score ``index`` directly.
+        """
+        raise NotImplementedError("Implement predict in src/{{ model_slug }}/predict.py.")
+{% endif %}

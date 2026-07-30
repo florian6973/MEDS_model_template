@@ -554,7 +554,7 @@ commands are called and which optional inputs are supplied — and the parameter
 both. So a profile reduces to one config file:
 
 ```yaml
-# configs/profile/motor_finetune.yaml
+# configs/profile/finetune.yaml
 supervised_train:
   input_pretrained_model_dir: ${models.pretrained}
 predict:

@@ -12,10 +12,11 @@ A [Copier](https://copier.readthedocs.io) template for building **standards-conf
 interface and are directly contributable to
 [MEDS-DEV](https://github.com/Medical-Event-Data-Standard/MEDS-DEV).
 
-Every model generated from this template — a supervised classifier, a zero-shot autoregressive generator
-(à la [MEDS-EIC-AR](https://github.com/mmcdermott/MEDS_EIC_AR)), a query-based pretrained model (à la
-[EveryQuery](https://github.com/payalchandak/EveryQuery)), a MOTOR-style time-to-event model, or a frozen
-representation probe — has the **same usage pattern**:
+The template generates the **command DAG, not the model**. `model.py` is a stub whose hooks raise until
+you write them; what you get for free is the interface, the artifact discipline, and a test suite that is
+the specification your model has to satisfy.
+
+Every model generated from this template has the **same usage pattern**:
 
 ```bash
 pip install .                    # or: uv sync
@@ -79,34 +80,35 @@ uv tool install meds-model-template
 meds-model-new ./my-model
 ```
 
-Pick a **profile** at generation time (or `custom` to choose each command):
+Pick a **DAG** at generation time — one profile per chain in
+[`design-interface.md`](design-interface.md):
 
-| Profile | Chain | Analogue |
-|---|---|---|
-| `supervised_basic` | preprocess ×2 → `supervised_train` → `predict` | a classic supervised classifier |
-| `zero_shot_ar` | + `pretrain`, `infer` trajectories, zero-shot `predict` | MEDS-EIC-AR |
-| `every_query` | + `pretrain`, `predict` by native query | EveryQuery |
-| `motor_finetune` | + `pretrain`, then fine-tuned `supervised_train` | MOTOR |
-| `probe` | + `pretrain`, `infer` embeddings, head on frozen features | linear probing |
+| Profile | Chain | `predict` consumes | Like |
+|---|---|---|---|
+| `supervised` | preprocess ×2 → `supervised_train` → `predict` | supervised model | a classic task classifier |
+| `finetune` | + `pretrain`, then fine-tune | supervised model | MOTOR |
+| `probe` | + `pretrain`, `infer` embeddings, head on frozen features | supervised model (the head) | linear probing |
+| `zero_shot_direct` | `pretrain` → `predict` straight from the model | pretrained model | EveryQuery |
+| `zero_shot_materialized` | `pretrain` → `infer` scores → `predict` from them | inference artifacts | MEDS-EIC-AR |
+| `packaged` | preprocess ×2 → `predict` | nothing (weights ship with the repo) | PFN-style |
 
-A profile is **configuration, not a code path**: every generated repository ships all six commands. Only
-`commands.py` (which the dispatcher reads before Hydra composes) and the model class differ.
+A profile is a **shape, not a model**. Every generated repository ships all six commands; the profile
+decides which are registered and how their artifacts connect. The render tests assert each one is a
+*runnable* DAG: everything a command requires is produced by another command in the chain, and nothing
+produced is left unconsumed.
 
 ## What you get
 
-- **`src/meds_model_base/`** — the *vendored, template-managed* contract: command ABCs, source arbitration,
-  the `meds-model` dispatcher, the manifest layer, default command implementations (MEDS-transforms +
-  meds-torch-data + Lightning + ACES + meds-evaluation), schema validators, a small MEDS-batch adapter
-  layer, and a reusable pytest harness. `copier update` re-renders this to pull in contract improvements.
-  **It contains no models.**
-- **`src/<your_model>/`** — the *user-owned* surface: `model.py` (the full model, rendered for your
-  profile — not a subclass of something vendored), `predict.py` (task resolution, for zero-shot models),
-  `commands.py` (which commands you support), and `configs/`. Protected from `copier update`.
+- **`src/<your_model>/model.py`** — **a stub.** The hooks your DAG calls, documented, each raising
+  `NotImplementedError`. This is the part the template deliberately does not write for you.
+- **`src/meds_model_base/`** — the *vendored, template-managed* contract: command ABCs, source
+  arbitration, the `meds-model` dispatcher, the manifest layer, default command implementations
+  (MEDS-transforms + meds-torch-data + Lightning + ACES + meds-evaluation), schema validators, and a small
+  MEDS-batch adapter layer. `copier update` re-renders it. **It contains no models.**
 - **Hydra configs** (one root per command, plus a shared `paths` group), **CI**, **pre-commit**, a
-  **`model.yaml`/`requirements.txt`** for MEDS-DEV, and a three-tier **test suite**: CLI smoke tests, an
-  end-to-end pipeline smoke test on
-  [meds-testing-helpers](https://github.com/mmcdermott/meds_testing_helpers) data, and a
-  **model-specific synthetic-data property test** with a negative control.
+  **`model.yaml`/`requirements.txt`** for MEDS-DEV, and a **conformance test suite**: CLI and workspace
+  tests that run immediately, plus end-to-end and designed-signal learnability tests that skip while
+  `model.py` is a stub and start running the moment you implement it.
 
 ## Configuration
 

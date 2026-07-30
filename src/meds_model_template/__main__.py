@@ -4,7 +4,7 @@ Usage::
 
     meds-model-new ./my-model                       # from the published template on GitHub
     meds-model-new ./my-model --src /path/to/template
-    meds-model-new ./my-model --profile zero_shot_ar --defaults
+    meds-model-new ./my-model --profile probe --defaults
     meds-model-new ./my-model --data model_slug=my_model --vcs-ref=HEAD
 
 Any option this wrapper does not define is forwarded verbatim to ``copier copy``.
@@ -43,8 +43,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--profile",
         help=(
-            "Which command chain to generate (supervised_basic, zero_shot_ar, every_query, "
-            "motor_finetune, probe, custom). Forwarded as `--data profile=<value>`; the value is validated "
+            "Which command DAG to generate (supervised, finetune, probe, zero_shot_direct, "
+            "zero_shot_materialized, packaged, custom). Forwarded as `--data profile=<value>`; the value "
+            "is validated "
             "by the template rather than here, so this stays in sync with copier.yml automatically."
         ),
     )

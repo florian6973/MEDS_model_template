@@ -42,6 +42,7 @@ __all__ = [
     "SupervisedPredictCommand",
     "ProbePredictCommand",
     "MaterializedPredictCommand",
+    "PackagedPredictCommand",
     "ZeroShotPredictCommand",
 ]
 
@@ -56,6 +57,7 @@ _DEFAULTS = {
     "SupervisedPredictCommand": "predict",
     "ProbePredictCommand": "predict",
     "MaterializedPredictCommand": "predict",
+    "PackagedPredictCommand": "predict",
     "ZeroShotPredictCommand": "predict",
 }
 

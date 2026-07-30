@@ -40,7 +40,7 @@ Render a repo by hand and exercise it (mirrors the `rendered-smoke` CI job):
 ```bash
 uvx copier copy --vcs-ref=HEAD --defaults --trust \
   --data model_slug=demo_model --data model_name="Demo Model" \
-  --data profile=supervised_basic . /tmp/demo_model
+  --data profile=supervised . /tmp/demo_model
 cd /tmp/demo_model
 uv venv && uv pip install torch --index-url https://download.pytorch.org/whl/cpu
 uv pip install -e . --group dev
@@ -65,32 +65,35 @@ config. That catches broken Jinja, unused imports, and malformed YAML without in
 
 - `src/meds_model_base/` — the **vendored, template-managed contract**: command ABCs and arbitration, the
   dispatcher, the manifest layer, default command implementations, schemas, artifact plumbing, and a small
-  MEDS-batch adapter layer (`lightning/modules.py`: `CodeEmbedder`, `padding_mask`, `masked_mean`,
-  `BaseLightningModule`). Copied *verbatim* and re-rendered by `copier update`.
-  **No model implementations live here** — see "Where models live" below.
-- `src/<model_slug>/` — the **user-owned surface**: `model.py`, `predict.py` (zero-shot profiles only),
-  `commands.py`, `configs/`. `model.py`, `predict.py`, `commands.py`, `configs/model/**`,
-  `configs/paths/**` and `configs/profile/**` are protected from `copier update` (`_skip_if_exists`);
-  `__main__.py` and the other config groups are not.
+  MEDS-batch adapter layer. Copied *verbatim* and re-rendered by `copier update`. **No models.**
+- `src/<model_slug>/` — the **user-owned surface**: `model.py` (a stub), `predict.py` (a stub, for the
+  `zero_shot_direct` and `packaged` DAGs), `commands.py`, `configs/`. All of those plus
+  `configs/model/**`, `configs/paths/**` and `configs/profile/**` are protected from `copier update`
+  (`_skip_if_exists`); `__main__.py` and the other config groups are not.
 
-### Where models live
+### The template ships no model
 
-`meds_model_base` used to ship a `profiles/` package with four complete `LightningModule`s that
-`model.py` subclassed. That was removed: a model is exactly the thing a user owns, and vendoring it meant
-the file they were told to edit was a three-line stub while their actual model sat in a directory
-`copier update` overwrites.
+`model.py` is a **stub**: it declares the hooks the chosen DAG calls and raises `NotImplementedError` from
+each, marked with a class attribute `is_stub = True`. This is deliberate and load-bearing — do not "helpfully"
+fill it in.
 
-Now each profile's full implementation renders into `src/<slug>/model.py` — encoder inlined, loss
-inlined, nothing to subclass. Model-specific task resolution (`resolve`) renders into
-`src/<slug>/predict.py`, which exists only for the zero-shot profiles; the file is made conditional by the
-Copier idiom of a Jinja filename that evaluates to empty. The `probe` profile renders two classes into
-`model.py` — `Model` (the foundation model) and `Probe` (the head), selected by
-`configs/model/probe.yaml`, which is why `supervised_train.yaml` is the one command root that is a
-`.jinja`.
+The history is worth knowing, because the pull is to re-add a model each time something needs one:
 
-What stayed in the contract is only what must know the MEDS batch format or the command contract. The
-consequence to accept: `copier update` can no longer fix a bug in a model implementation. That is correct
-— it's the user's model — but it means the rendered implementations need to be right at generation time.
+1. `meds_model_base/profiles/` held four complete `LightningModule`s that `model.py` subclassed in three
+   lines. That inverted the ownership split — the file users are told to edit was a stub while their real
+   model lived where `copier update` overwrites it.
+2. Those moved into a fully-rendered `model.py`. Better, but the template was still choosing architectures.
+3. Now the architecture is gone entirely. `profile` selects a **DAG shape**, nothing more.
+
+What stayed in the contract is only what must know the MEDS batch format or the command contract:
+`CodeEmbedder`, `padding_mask`, `masked_mean`, `BaseLightningModule` (whose `infer_step` / `inference_kind`
+the `infer` command reads), and the inference-artifact plumbing a probe joins against.
+
+**The cost, which is real:** nothing proves a chain trains and predicts end to end. `tests/` here is
+structural, and the rendered conformance tests skip on a stub. `meds_model_base.testing.skip_if_stub`
+is what gates them; a repo is green but honest, and `-rs` in CI shows the skips. Closing this gap needs a
+reference implementation living *outside* the payload (an `examples/` tree that a test renders a profile
+and drops in). That is the agreed follow-up — not a reason to put a model back in `template/`.
 
 ### The command contract
 
@@ -153,30 +156,43 @@ Each of these otherwise produces output that looks correct, so don't "simplify" 
 - Zero-shot `resolve` is **abstract**. A placeholder returning a constant would yield a schema-valid
   predictions file of pure noise that every downstream check would pass.
 
-### Profiles and Jinja gating
+### Profiles are DAGs
 
-`copier.yml`'s `profile` question presets `implements_*` booleans (only *asked* for `custom`). Unlike the
-previous design, those gate only `commands.py.jinja`, `model.py.jinja`, `configs/profile/default.yaml.jinja`
-and `model.yaml.jinja` — every command module and config root ships unconditionally.
+There is one profile per chain in `design-interface.md`: `supervised`, `finetune`, `probe`,
+`zero_shot_direct`, `zero_shot_materialized`, `packaged`, plus `custom`. Adding a chain to the spec means
+adding a profile, and `tests/test_render.py::test_every_command_class_is_reachable` fails if a command
+class exists that no profile registers — which is how `MaterializedPredictCommand` was caught sitting dead.
+
+`copier.yml`'s `implements_*` booleans now gate only the `custom` profile. Nine files branch on `profile`:
+`commands.py.jinja`, `model.py.jinja`, the conditional `predict.py` filename, `configs/model/default.yaml`,
+`configs/model/probe.yaml`, `configs/supervised_train.yaml`, `configs/profile/default.yaml`,
+`model.yaml.jinja`, and `README.md.jinja`.
 
 `commands.py.jinja` builds an `entries` list in Jinja and derives its import block from it, so a profile
-can never import a class it doesn't register (which would fail ruff's F401 in the generated repo).
+can never import a class it does not register (an F401 in the generated repo).
 
 `_templates_suffix: .jinja` means **only** `.jinja` files are rendered; everything else under `template/`
-is copied byte-for-byte (path segments like `{{ model_slug }}` are still substituted). Adding Jinja to a
-file without the suffix silently ships literal braces.
+is copied byte-for-byte (path segments like `{{ model_slug }}` are still substituted). A file whose
+rendered *name* is empty is skipped — that is how `predict.py` is made conditional.
 
-### Test tiers in a generated repo
+### Tests
 
-1. `test_cli_smoke.py` — `--help` exits 0 per supported command; `commands` lists exactly `COMMANDS`; an
-   unsupported command fails clearly.
-2. `test_smoke_pipeline.py` — end-to-end over `meds_testing_helpers` fixtures via subprocess. Which source
-   each command receives is **derived from the registered class's `supported_sources`**, so a profile whose
-   wiring and implementation disagree fails rather than silently exercising a different chain.
-3. `test_property.py` (`@pytest.mark.slow`) — designed-signal learnability with a negative control.
+`tests/` in **this** repo is structural and never touches a model. Beyond rendering each DAG and
+byte-compiling it, it asserts four properties that each caught a real bug:
 
-`tests/test_render.py` here is a fourth, cheaper tier: render each profile, assert the registry matches,
-assert every config root exists and parses, and `compileall` the rendered `src/`.
+- `test_model_is_a_stub` — the payload ships no implementation (guards against regression 1–3 above).
+- `test_declared_chain_matches_registry` — `configs/profile/default.yaml`'s `chain` equals `commands.py`.
+- `test_every_consumed_artifact_is_produced` — required sources have producers, and `infer` output is
+  consumed. Parsed with `ast`, not regex: `supported_sources` is declared in some classes and inherited in
+  others, and a regex loose enough to span a class body matches the *next* class's declaration.
+- `test_rendered_repo_passes_ruff` — this repo excludes `template/` from linting, so without it the
+  vendored contract is never linted here at all.
+
+`tests/` in a **generated** repo is the conformance suite for the user's model: CLI/workspace/arbitration
+tests that run immediately, plus `test_smoke_pipeline` and `test_property` (designed signal + negative
+control) that `skip_if_stub` until `model.py` is implemented. Both drive the chain through
+`conftest.run_chain`, which reads `COMMANDS` and each class's `supported_sources` rather than hardcoding a
+chain — so a DAG whose wiring and implementation disagree fails instead of silently testing something else.
 
 ## Known gaps
 

@@ -218,6 +218,22 @@ class MaterializedPredictCommand(_PredictRunMixin, PredictCommand):
         )
 
 
+class PackagedPredictCommand(_PredictRunMixin, PredictCommand):
+    """Score a task with weights that ship inside the repository (PFN-style), taking no source argument.
+
+    This is the one case where ``predict`` may run with no input artifact. Arbitration allows it only
+    because :attr:`packaged_model` is set — an implementation that forgets to set it gets the normal
+    "requires one of ..." error rather than silently scoring with nothing.
+
+    Subclasses set ``packaged_model`` to an identifier for the shipped weights (it is recorded in the
+    predictions manifest, so a scored file can always be traced back to what produced it) and implement
+    :meth:`predict`.
+    """
+
+    supported_sources: ClassVar[frozenset[str]] = frozenset()
+    packaged_model: ClassVar[str | None] = None
+
+
 class ZeroShotPredictCommand(_PredictRunMixin, PredictCommand):
     """Score a task directly from a pretrained model, without task-specific training.
 
@@ -284,6 +300,7 @@ __all__ = [
     "CoverageError",
     "task_definition_path",
     "MaterializedPredictCommand",
+    "PackagedPredictCommand",
     "ProbePredictCommand",
     "SupervisedPredictCommand",
     "ZeroShotPredictCommand",

@@ -1,40 +1,26 @@
-"""Tier 2 — end-to-end pipeline smoke on a tiny real MEDS dataset.
+"""Tier 2 — end-to-end conformance: does this model's DAG actually run?
 
-Runs exactly the chain this model supports (read from ``COMMANDS``), threading each artifact into the next,
-and asserts the ``predict`` output conforms to ``meds_evaluation.PredictionSchema`` — the load-bearing
-compatibility check with the shared evaluation tool. Two epochs on ~6 subjects, so it runs in CI.
+Drives the chain this model registers over a tiny real MEDS dataset and asserts the ``predict`` output
+conforms to ``meds_evaluation.PredictionSchema`` — the load-bearing compatibility check with the shared
+evaluation tool.
 
-Which source each command receives is derived from the registered class's ``supported_sources``, not
-hardcoded per profile. If a profile's wiring and its implementation ever disagree, this test fails rather
-than quietly exercising a different chain than the one the model actually declares.
+**This is the contract your model has to satisfy, not scaffolding to delete.** The parts that need a model
+skip while ``model.py`` is the generated stub, and start running as soon as you remove the ``is_stub``
+marker. The parts that don't — the workspace, the manifests, argument arbitration — run from day one.
 """
 import polars as pl
 import pytest
 import yaml
 from meds_evaluation.schema import PredictionSchema
-
 from meds_model_base.commands import CommandName
+from meds_model_base.testing import skip_if_stub
 
 from {{ model_slug }}.commands import COMMANDS
-
-# Tiny, fast overrides shared by every training command in this test.
-_TRAIN = [
-    "trainer.max_epochs=2",
-    "trainer.accelerator=cpu",
-    "batch_size=4",
-    "num_workers=0",
-    "do_overwrite=true",
-]
-
-
-def _supported(command: CommandName) -> frozenset[str]:
-    """The input sources the class registered for ``command`` declares it handles."""
-    cls = COMMANDS[command]
-    return cls.supported_sources if cls.supported_sources is not None else frozenset(cls.sources)
+from {{ model_slug }}.model import Model
 
 
 def test_workspace_is_published_with_manifests(data_dir):
-    """preprocess_data and preprocess_task publish self-describing artifacts."""
+    """preprocess_data and preprocess_task publish self-describing artifacts. No model involved."""
     patients = yaml.safe_load((data_dir / "patients" / "manifest.yaml").read_text())
     assert patients["artifact"]["type"] == "data"
     assert patients["command"] == "preprocess_data"
@@ -45,93 +31,8 @@ def test_workspace_is_published_with_manifests(data_dir):
     assert task["labels"], "the task manifest should summarize its labels per split"
 
 
-def test_end_to_end(cli, data_dir, tmp_path):
-    pretrained_dir = None
-    if CommandName.pretrain in COMMANDS:
-        pretrained_dir = tmp_path / "pretrained"
-        cli([
-            "pretrain",
-            f"input_data_dir={data_dir}",
-            f"output_pretrained_model_dir={pretrained_dir}",
-            *_TRAIN,
-        ])
-        assert (pretrained_dir / "manifest.yaml").is_file()
-
-    inference_subdir = None
-    if CommandName.infer in COMMANDS:
-        assert pretrained_dir is not None, "`infer` requires a pretrained model"
-        inference_subdir = "inference/embeddings"
-        cli([
-            "infer",
-            f"input_data_dir={data_dir}",
-            f"input_pretrained_model_dir={pretrained_dir}",
-            f"output_inference_subdir={inference_subdir}",
-            "batch_size=4",
-            "do_overwrite=true",
-        ])
-        manifest = yaml.safe_load((data_dir / inference_subdir / "manifest.yaml").read_text())
-        # The kind is what makes an inference artifact safely consumable downstream.
-        assert manifest["artifact"]["kind"]
-        assert (data_dir / inference_subdir / "artifacts.parquet").is_file()
-
-    supervised_dir = None
-    if CommandName.supervised_train in COMMANDS:
-        supervised_dir = tmp_path / "supervised"
-        args = [
-            "supervised_train",
-            f"input_data_dir={data_dir}",
-            f"output_supervised_model_dir={supervised_dir}",
-            *_TRAIN,
-        ]
-        sources = _supported(CommandName.supervised_train)
-        if "input_pretrained_model_dir" in sources and pretrained_dir is not None:
-            args.append(f"input_pretrained_model_dir={pretrained_dir}")
-        elif "input_inference_subdir" in sources:
-            assert inference_subdir is not None, "a probe needs materialized inference artifacts"
-            args.append(f"input_inference_subdir={inference_subdir}")
-        cli(args)
-        assert (supervised_dir / "manifest.yaml").is_file()
-
-    if CommandName.predict not in COMMANDS:
-        return
-
-    sources = _supported(CommandName.predict)
-    if "input_supervised_model_dir" in sources:
-        source_arg = f"input_supervised_model_dir={supervised_dir}"
-    elif "input_pretrained_model_dir" in sources:
-        pytest.skip(
-            "Zero-shot prediction needs a task *definition* to resolve, and this fixture supplies "
-            "pre-materialized labels. Exercise it against an ACES task YAML."
-        )
-    else:
-        source_arg = f"input_inference_subdir={inference_subdir}"
-
-    preds_dir = tmp_path / "predictions"
-    cli([
-        "predict",
-        f"input_data_dir={data_dir}",
-        source_arg,
-        f"output_predictions_dir={preds_dir}",
-        "splits=[held_out]",
-        "batch_size=4",
-        "do_overwrite=true",
-    ])
-
-    preds = pl.read_parquet(preds_dir / "predictions.parquet")
-    # The contract: the model's output is scorable by the shared meds-evaluation tool.
-    PredictionSchema.align(preds.to_arrow())
-    assert "predicted_boolean_probability" in preds.columns
-    assert {"subject_id", "prediction_time"}.issubset(preds.columns)
-    # And it never carries ground truth back out.
-    assert "boolean_value" not in preds.columns
-
-    manifest = yaml.safe_load((preds_dir / "manifest.yaml").read_text())
-    coverage = manifest["coverage"]["held_out"]
-    assert coverage["n_written"] == coverage["n_expected"] == len(preds)
-
-
-def test_conflicting_sources_are_rejected(cli, data_dir, tmp_path):
-    """Two prediction sources is an error, not a precedence decision."""
+def test_conflicting_sources_are_rejected(data_dir, tmp_path):
+    """Two prediction sources is an error, not a precedence decision. Needs no model."""
     if CommandName.predict not in COMMANDS or len(COMMANDS[CommandName.predict].sources) < 2:
         pytest.skip("this model's predict command has fewer than two possible sources")
 
@@ -151,3 +52,34 @@ def test_conflicting_sources_are_rejected(cli, data_dir, tmp_path):
     )
     assert result.returncode != 0
     assert "more than one input source" in (result.stdout + result.stderr)
+
+
+def test_end_to_end(chain, data_dir, tmp_path):
+    skip_if_stub(Model)
+    artifacts = chain(data_dir, tmp_path)
+
+    for role in ("pretrained", "supervised"):
+        if role in artifacts:
+            assert (artifacts[role] / "manifest.yaml").is_file(), f"{role} artifact has no manifest"
+
+    if "inference" in artifacts:
+        manifest = yaml.safe_load((artifacts["inference"] / "manifest.yaml").read_text())
+        # The kind is what makes an inference artifact safely consumable downstream.
+        assert manifest["artifact"]["kind"]
+        assert (artifacts["inference"] / "artifacts.parquet").is_file()
+
+    if "predictions" not in artifacts:
+        return
+
+    preds_dir = artifacts["predictions"]
+    preds = pl.read_parquet(preds_dir / "predictions.parquet")
+    # The contract: the model's output is scorable by the shared meds-evaluation tool.
+    PredictionSchema.align(preds.to_arrow())
+    assert "predicted_boolean_probability" in preds.columns
+    assert {"subject_id", "prediction_time"}.issubset(preds.columns)
+    # And it never carries ground truth back out.
+    assert "boolean_value" not in preds.columns
+
+    manifest = yaml.safe_load((preds_dir / "manifest.yaml").read_text())
+    coverage = manifest["coverage"]["held_out"]
+    assert coverage["n_written"] == coverage["n_expected"] == len(preds)
