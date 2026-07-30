@@ -89,10 +89,13 @@ probabilities — it never reads ground-truth labels, and evaluation is a separa
 
 ## Editing
 
-- **`src/{{ model_slug }}/model.py`** — your `LightningModule`. Edit freely.
-- **`src/{{ model_slug }}/commands.py`** — which commands this model supports.
+- **`src/{{ model_slug }}/model.py`** — the model itself, rendered in full for this profile. It is not a
+  subclass of anything vendored, so change the encoder, the loss, the architecture — all of it is here.
+{% if profile in ['zero_shot_ar', 'every_query'] %}- **`src/{{ model_slug }}/predict.py`** — how this model resolves a task into probabilities.
+{% endif %}- **`src/{{ model_slug }}/commands.py`** — which commands this model supports.
 - **`src/{{ model_slug }}/configs/`** — `model/` hyperparameters, `paths/` locations, `profile/` wiring.
-- **`src/meds_model_base/`** — the vendored contract (managed by `copier update`; don't edit).
+- **`src/meds_model_base/`** — the vendored contract (managed by `copier update`; don't edit). It holds
+  the command graph, manifests, schemas and a small MEDS-batch adapter layer — no models.
 
 ## Testing
 

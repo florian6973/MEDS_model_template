@@ -21,6 +21,7 @@ _envops:
 _skip_if_exists:
   - "src/{{ model_slug }}/model.py"
   - "src/{{ model_slug }}/commands.py"
+  - "src/{{ model_slug }}/predict.py"
   - "src/{{ model_slug }}/configs/model/**"
   - "src/{{ model_slug }}/configs/paths/**"
   - "src/{{ model_slug }}/configs/profile/**"

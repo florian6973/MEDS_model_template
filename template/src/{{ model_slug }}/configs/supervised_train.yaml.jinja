@@ -5,8 +5,10 @@
 defaults:
   - paths: default
   - datamodule: task
-  - model: default
-  - trainer: default
+{% if profile == 'probe' %}  # This profile trains a head on frozen embeddings, so `model` here is the probe, not the encoder.
+  - model: probe
+{% else %}  - model: default
+{% endif %}  - trainer: default
   - callbacks: default
   - logger: csv
   - optimizer: adamw
@@ -25,10 +27,6 @@ max_seq_len: 256
 batch_size: 32
 num_workers: 0
 seed: 0
-
-#: Probe head shape, used only when training on inference artifacts (0 hidden units == a linear probe).
-probe_hidden_size: 0
-probe_dropout: 0.0
 
 do_overwrite: false
 do_resume: true

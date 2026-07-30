@@ -147,8 +147,8 @@ class ProbeTrainCommand(_TrainFlow, SupervisedTrainCommand):
     """Train a probe on frozen inference artifacts (``input_inference_subdir``).
 
     Reads ``artifacts.parquet`` (validated to be of kind ``embeddings``), joins it to the task labels on
-    ``(subject_id, prediction_time)``, and fits a small head. The pretrained model is never loaded — this
-    is the cheap downstream half of the representation-probe chain.
+    ``(subject_id, prediction_time)``, and fits the head from ``cfg.model`` on the resulting matrix. The
+    pretrained model is never loaded — this is the cheap downstream half of the representation-probe chain.
     """
 
     artifact_type: ClassVar[ArtifactType] = ArtifactType.supervised_model
@@ -163,8 +163,10 @@ class ProbeTrainCommand(_TrainFlow, SupervisedTrainCommand):
         import torch
         from lightning.pytorch import seed_everything
 
+        from hydra.utils import instantiate
+
         from ..lightning import build_trainer
-        from ..lightning.probe import LinearProbe, build_probe_dataloaders, load_probe_frames
+        from ..lightning.probe import build_probe_dataloaders, load_probe_frames
 
         role, value = self.source
         inference_dir = resolve_subdir(cfg.input_data_dir, value)
@@ -185,11 +187,8 @@ class ProbeTrainCommand(_TrainFlow, SupervisedTrainCommand):
             inference_dir, resolve_subdir(cfg.input_data_dir, cfg.input_task_subdir)
         )
         loaders, input_dim = build_probe_dataloaders(frames, feature_column, cfg)
-        model = LinearProbe(
-            input_dim=input_dim,
-            hidden_size=int(cfg.get("probe_hidden_size", 0) or 0),
-            dropout=float(cfg.get("probe_dropout", 0.0) or 0.0),
-        )
+        # Built from `cfg.model` like every other trainable module, so the probe head is yours to change.
+        model = instantiate(cfg.model, input_dim=input_dim)
 
         trainer = build_trainer(cfg, checkpoint_dir=work_dir)
         trainer.fit(model, **loaders, ckpt_path=str(resume_ckpt) if resume_ckpt else None)

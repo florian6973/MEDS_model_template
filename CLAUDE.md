@@ -64,11 +64,33 @@ config. That catches broken Jinja, unused imports, and malformed YAML without in
 ### Ownership split inside a generated repo
 
 - `src/meds_model_base/` — the **vendored, template-managed contract**: command ABCs and arbitration, the
-  dispatcher, the manifest layer, default command implementations, schemas, profile `LightningModule`s,
-  test helpers. Copied *verbatim* by Copier and re-rendered by `copier update`.
-- `src/<model_slug>/` — the **user-owned surface**: `model.py`, `commands.py`, `configs/`. `model.py`,
-  `commands.py`, `configs/model/**`, `configs/paths/**` and `configs/profile/**` are protected from
-  `copier update` (`_skip_if_exists` in `copier.yml`); `__main__.py` and the other config groups are not.
+  dispatcher, the manifest layer, default command implementations, schemas, artifact plumbing, and a small
+  MEDS-batch adapter layer (`lightning/modules.py`: `CodeEmbedder`, `padding_mask`, `masked_mean`,
+  `BaseLightningModule`). Copied *verbatim* and re-rendered by `copier update`.
+  **No model implementations live here** — see "Where models live" below.
+- `src/<model_slug>/` — the **user-owned surface**: `model.py`, `predict.py` (zero-shot profiles only),
+  `commands.py`, `configs/`. `model.py`, `predict.py`, `commands.py`, `configs/model/**`,
+  `configs/paths/**` and `configs/profile/**` are protected from `copier update` (`_skip_if_exists`);
+  `__main__.py` and the other config groups are not.
+
+### Where models live
+
+`meds_model_base` used to ship a `profiles/` package with four complete `LightningModule`s that
+`model.py` subclassed. That was removed: a model is exactly the thing a user owns, and vendoring it meant
+the file they were told to edit was a three-line stub while their actual model sat in a directory
+`copier update` overwrites.
+
+Now each profile's full implementation renders into `src/<slug>/model.py` — encoder inlined, loss
+inlined, nothing to subclass. Model-specific task resolution (`resolve`) renders into
+`src/<slug>/predict.py`, which exists only for the zero-shot profiles; the file is made conditional by the
+Copier idiom of a Jinja filename that evaluates to empty. The `probe` profile renders two classes into
+`model.py` — `Model` (the foundation model) and `Probe` (the head), selected by
+`configs/model/probe.yaml`, which is why `supervised_train.yaml` is the one command root that is a
+`.jinja`.
+
+What stayed in the contract is only what must know the MEDS batch format or the command contract. The
+consequence to accept: `copier update` can no longer fix a bug in a model implementation. That is correct
+— it's the user's model — but it means the rendered implementations need to be right at generation time.
 
 ### The command contract
 

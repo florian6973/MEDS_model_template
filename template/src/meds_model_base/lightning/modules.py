@@ -1,15 +1,18 @@
-"""Reusable ``nn.Module`` building blocks and a shared ``BaseLightningModule``.
+"""The MEDS-batch adapter layer: reading a ``MEDSTorchBatch``, and the Lightning contract base.
 
-These are the pieces the four reference profiles compose. They operate on a ``MEDSTorchBatch`` in the
-default ``SM`` (subject-measurement, flattened) mode, whose relevant tensors are:
+Everything here is about the *data format* or the *command contract*, not about modelling. Encoders,
+heads and losses belong in a generated repo's ``model.py``, where they can be edited without fighting
+``copier update``.
+
+The batch tensors this layer speaks to (default ``SM`` — subject-measurement, flattened — mode):
 
 - ``batch.code`` — ``[B, L]`` int64 code (vocab) indices; ``PAD_INDEX == 0`` marks padding.
 - ``batch.numeric_value`` / ``batch.numeric_value_mask`` — ``[B, L]`` float value + presence mask.
 - ``batch.time_delta_days`` — ``[B, L]`` float inter-measurement gaps.
 - ``batch.boolean_value`` — ``[B]`` labels (present only when the datamodule has a ``task_labels_dir``).
 
-Nothing here is task-specific: the profiles add the head (classification / autoregressive LM / query /
-time-to-event) on top.
+If that format changes, this module changes once and ``copier update`` propagates it. That is the whole
+reason these few pieces are contract rather than model code.
 """
 
 from __future__ import annotations
@@ -63,6 +66,9 @@ def masked_mean(x: Tensor, mask: Tensor) -> Tensor:
 class CodeEmbedder(nn.Module):
     """Embed a ``MEDSTorchBatch`` into ``[B, L, d_model]``: code embedding (+ numeric value + time delta).
 
+    This is the batch-to-tensor boundary — the one place that has to know which fields a MEDS batch
+    carries. What happens to the resulting tensor is your model's business.
+
     Args:
         vocab_size: size of the code vocabulary (``datamodule.config.vocab_size``).
         d_model: embedding dimension.
@@ -94,62 +100,13 @@ class CodeEmbedder(nn.Module):
         return x
 
 
-class GRUEncoder(nn.Module):
-    """A small GRU sequence encoder: ``[B, L, H] → [B, L, H]`` (contextualized per-position states)."""
-
-    def __init__(self, d_model: int, num_layers: int = 1, dropout: float = 0.0) -> None:
-        super().__init__()
-        self.gru = nn.GRU(
-            d_model,
-            d_model,
-            num_layers=num_layers,
-            batch_first=True,
-            dropout=dropout if num_layers > 1 else 0.0,
-        )
-
-    def forward(self, x: Tensor, mask: Tensor | None = None) -> Tensor:
-        out, _ = self.gru(x)
-        return out
-
-
-class TransformerEncoder(nn.Module):
-    """A learned-positional Transformer encoder: ``[B, L, H] → [B, L, H]`` with key-padding masking."""
-
-    def __init__(
-        self,
-        d_model: int,
-        nhead: int = 4,
-        num_layers: int = 2,
-        dim_feedforward: int | None = None,
-        dropout: float = 0.1,
-        max_len: int = 2048,
-    ) -> None:
-        super().__init__()
-        self.pos = nn.Embedding(max_len, d_model)
-        layer = nn.TransformerEncoderLayer(
-            d_model,
-            nhead,
-            dim_feedforward=dim_feedforward or 4 * d_model,
-            dropout=dropout,
-            batch_first=True,
-            norm_first=True,
-        )
-        self.encoder = nn.TransformerEncoder(layer, num_layers=num_layers)
-
-    def forward(self, x: Tensor, mask: Tensor | None = None) -> Tensor:
-        positions = torch.arange(x.shape[1], device=x.device)
-        x = x + self.pos(positions).unsqueeze(0)
-        key_padding_mask = ~mask if mask is not None else None  # True == ignore
-        return self.encoder(x, src_key_padding_mask=key_padding_mask)
-
-
 class BaseLightningModule(L.LightningModule):
-    """Shared Lightning plumbing: optimizer/scheduler wiring + train/val logging.
+    """Shared Lightning plumbing plus the two hooks the commands read.
 
-    Subclasses implement :meth:`compute_loss` (returns ``(loss, metrics_dict)``); this base handles
-    ``training_step`` / ``validation_step`` (logging the loss and any metrics) and ``configure_optimizers``.
-    ``optimizer`` / ``scheduler`` are *partials* (from ``_partial_: true`` Hydra configs) — an optimizer
-    factory ``params -> Optimizer`` and a scheduler factory ``optimizer -> LRScheduler``.
+    Subclasses implement :meth:`compute_loss` (returning ``(loss, metrics_dict)``); this base handles
+    ``training_step`` / ``validation_step`` and ``configure_optimizers``. ``optimizer`` / ``scheduler`` are
+    *partials* (from ``_partial_: true`` Hydra configs) — an optimizer factory ``params -> Optimizer`` and a
+    scheduler factory ``optimizer -> LRScheduler``.
 
     Two hooks separate the two things a trained model is asked for downstream:
 
@@ -163,16 +120,6 @@ class BaseLightningModule(L.LightningModule):
     #: What :meth:`infer_step` produces; see ``meds_model_base.manifest.InferenceKind``.
     inference_kind: ClassVar[str] = "embeddings"
 
-    def infer_step(self, batch: MEDSTorchBatch) -> dict[str, Tensor]:
-        """Per-timepoint reusable outputs. Defaults to the pooled representation from ``encode``."""
-        encode = getattr(self, "encode", None)
-        if encode is None:
-            raise NotImplementedError(
-                f"{type(self).__name__} defines neither `encode` nor `infer_step`, so `infer` does not know "
-                "what to materialize. Implement one of them in your model."
-            )
-        return {"embedding": encode(batch).detach().cpu()}
-
     def __init__(
         self,
         optimizer: Callable[..., Optimizer] | None = None,
@@ -185,6 +132,16 @@ class BaseLightningModule(L.LightningModule):
     def compute_loss(self, batch: MEDSTorchBatch) -> tuple[Tensor, dict[str, Tensor]]:
         """Return ``(loss, metrics)`` for a batch. Implemented by subclasses."""
         raise NotImplementedError
+
+    def infer_step(self, batch: MEDSTorchBatch) -> dict[str, Tensor]:
+        """Per-timepoint reusable outputs. Defaults to the pooled representation from ``encode``."""
+        encode = getattr(self, "encode", None)
+        if encode is None:
+            raise NotImplementedError(
+                f"{type(self).__name__} defines neither `encode` nor `infer_step`, so `infer` does not know "
+                "what to materialize. Implement one of them in your model."
+            )
+        return {"embedding": encode(batch).detach().cpu()}
 
     def training_step(self, batch: MEDSTorchBatch, batch_idx: int) -> Tensor:
         loss, metrics = self.compute_loss(batch)

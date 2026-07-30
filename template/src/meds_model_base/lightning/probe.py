@@ -1,13 +1,15 @@
-"""Probing frozen inference artifacts: dataset assembly and a small trainable head.
+"""Inference-artifact plumbing for the representation-probe chain.
 
-The representation-probe chain (``pretrain`` → ``infer`` embeddings → ``supervised_train`` → ``predict``)
-never re-runs the foundation model downstream. Once embeddings are materialized, training a task head is a
-dense-feature problem: no tokenization, no meds-torch-data, just a join on ``(subject_id, prediction_time)``
-and a few epochs on a matrix.
+The chain (``pretrain`` → ``infer`` embeddings → ``supervised_train`` → ``predict``) never re-runs the
+foundation model downstream. Once embeddings are materialized, training a task head is a dense-feature
+problem: no tokenization, no meds-torch-data, just a join on ``(subject_id, prediction_time)``.
 
-That join is the load-bearing part. An embedding table and a task are both keyed on prediction timepoints,
-but nothing guarantees they were built from the same index — so coverage is measured and reported rather
-than assumed.
+What lives here is knowledge of the *artifact layout* — where the feature column is, how it joins to a
+task, and whether the join covered the index. The probe head itself is a model and lives in the generated
+repository, built through ``cfg.model`` like every other trainable module.
+
+That join is the load-bearing part: an embedding table and a task are both keyed on prediction timepoints,
+but nothing guarantees they were built from the same index, so coverage is measured rather than assumed.
 """
 
 from __future__ import annotations
@@ -16,15 +18,13 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-import lightning.pytorch as L
 import polars as pl
 import torch
-import torch.nn.functional as F
-from torch import Tensor, nn
 
 from ..schemas import SPLITS, train_split, tuning_split
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
+    import lightning.pytorch as L
     from omegaconf import DictConfig
 
 logger = logging.getLogger(__name__)
@@ -95,7 +95,7 @@ def load_probe_frames(
     return frames, feature_column, {"coverage": coverage}
 
 
-def _to_tensors(df: pl.DataFrame, feature_column: str) -> tuple[Tensor, Tensor]:
+def _to_tensors(df: pl.DataFrame, feature_column: str) -> tuple[torch.Tensor, torch.Tensor]:
     x = torch.tensor(df[feature_column].to_list(), dtype=torch.float32)
     y = torch.tensor(df["boolean_value"].to_list(), dtype=torch.float32)
     return x, y
@@ -127,70 +127,8 @@ def build_probe_dataloaders(
     return loaders, int(x_train.shape[1])
 
 
-class LinearProbe(L.LightningModule):
-    """A linear (or one-hidden-layer) binary head over frozen features.
-
-    Deliberately small: the point of a probe is to measure what the representation already contains, so
-    capacity here is a confound rather than a feature.
-
-    Args:
-        input_dim: embedding dimensionality.
-        hidden_size: 0 for a linear probe, else the width of a single hidden layer.
-        dropout: dropout applied before the head.
-        lr: AdamW learning rate.
-        threshold: probability threshold for the optional ``predicted_boolean_value`` column.
-    """
-
-    def __init__(
-        self,
-        input_dim: int,
-        hidden_size: int = 0,
-        dropout: float = 0.0,
-        lr: float = 1e-3,
-        threshold: float = 0.5,
-    ) -> None:
-        super().__init__()
-        self.save_hyperparameters()
-        layers: list[nn.Module] = []
-        if dropout:
-            layers.append(nn.Dropout(dropout))
-        if hidden_size:
-            layers += [nn.Linear(input_dim, hidden_size), nn.ReLU(), nn.Linear(hidden_size, 1)]
-        else:
-            layers.append(nn.Linear(input_dim, 1))
-        self.net = nn.Sequential(*layers)
-        self.threshold = threshold
-
-    def forward(self, x: Tensor) -> Tensor:
-        return self.net(x).squeeze(-1)
-
-    def _step(self, batch: tuple[Tensor, Tensor], stage: str) -> Tensor:
-        x, y = batch
-        logits = self(x)
-        loss = F.binary_cross_entropy_with_logits(logits, y)
-        self.log(f"{stage}/loss", loss, prog_bar=True, batch_size=x.shape[0], sync_dist=stage == "val")
-        return loss
-
-    def training_step(self, batch, batch_idx: int) -> Tensor:
-        return self._step(batch, "train")
-
-    def validation_step(self, batch, batch_idx: int) -> Tensor:
-        return self._step(batch, "val")
-
-    def predict_step(self, batch, batch_idx: int = 0) -> dict[str, Tensor]:
-        x = batch[0] if isinstance(batch, list | tuple) else batch
-        probs = torch.sigmoid(self(x))
-        return {
-            "predicted_boolean_probability": probs.detach().cpu(),
-            "predicted_boolean_value": (probs > self.threshold).detach().cpu(),
-        }
-
-    def configure_optimizers(self):
-        return torch.optim.AdamW(self.parameters(), lr=self.hparams.lr)
-
-
 def probe_predict_frame(
-    inference_dir: Path, index: pl.DataFrame, module: LinearProbe, batch_size: int = 256
+    inference_dir: Path, index: pl.DataFrame, module: L.LightningModule, batch_size: int = 256
 ) -> pl.DataFrame:
     """Score an index of timepoints from materialized embeddings (used by ``predict``).
 
@@ -221,9 +159,7 @@ def probe_predict_frame(
 
 __all__ = [
     "ARTIFACTS_FILENAME",
-    "LinearProbe",
     "build_probe_dataloaders",
     "load_probe_frames",
     "probe_predict_frame",
 ]
-

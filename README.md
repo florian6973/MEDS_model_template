@@ -2,7 +2,7 @@
 
 > [!WARNING]
 > **This repository is entirely AI-generated (as of this writing) and has not yet been human-reviewed.**
-> It was scaffolded end-to-end by an AI agent: the design, the vendored contract, all model profiles,
+> It was scaffolded end-to-end by an AI agent: the design, the vendored contract, every model profile,
 > the tests, and this README. It renders and passes its own smoke/property tests locally, but treat every
 > line as unreviewed — audit before relying on it, and expect breaking changes. Not yet validated against a
 > live MEDS-DEV run.
@@ -95,12 +95,13 @@ A profile is **configuration, not a code path**: every generated repository ship
 ## What you get
 
 - **`src/meds_model_base/`** — the *vendored, template-managed* contract: command ABCs, source arbitration,
-  the `meds-model` dispatcher, the manifest layer, default implementations (MEDS-transforms +
-  meds-torch-data + Lightning + ACES + meds-evaluation), schema validators, and a reusable pytest harness.
-  `copier update` re-renders this to pull in contract improvements.
-- **`src/<your_model>/`** — the *user-owned* surface: `model.py` (your `LightningModule`), `commands.py`
-  (which commands you support), and `configs/` (`model/`, `paths/`, `profile/`). Protected from
-  `copier update`.
+  the `meds-model` dispatcher, the manifest layer, default command implementations (MEDS-transforms +
+  meds-torch-data + Lightning + ACES + meds-evaluation), schema validators, a small MEDS-batch adapter
+  layer, and a reusable pytest harness. `copier update` re-renders this to pull in contract improvements.
+  **It contains no models.**
+- **`src/<your_model>/`** — the *user-owned* surface: `model.py` (the full model, rendered for your
+  profile — not a subclass of something vendored), `predict.py` (task resolution, for zero-shot models),
+  `commands.py` (which commands you support), and `configs/`. Protected from `copier update`.
 - **Hydra configs** (one root per command, plus a shared `paths` group), **CI**, **pre-commit**, a
   **`model.yaml`/`requirements.txt`** for MEDS-DEV, and a three-tier **test suite**: CLI smoke tests, an
   end-to-end pipeline smoke test on

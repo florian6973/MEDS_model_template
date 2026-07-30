@@ -1,3 +1,5 @@
+# Your model's hyperparameters. `_target_` points at the class in src/{{ model_slug }}/model.py, which is
+# yours to change — add arguments here as you add them there.
 _target_: {{ model_slug }}.model.Model
 {% if profile == 'zero_shot_ar' %}d_model: 128
 nhead: 4
@@ -6,18 +8,10 @@ dropout: 0.1
 max_seq_len: ${max_seq_len}
 max_new_tokens: 64
 {% elif profile == 'every_query' %}d_model: 64
-encoder: gru
 num_layers: 1
 dropout: 0.1
 use_numeric_value: true
-{% elif profile == 'motor_finetune' %}d_model: 64
-encoder: gru
-num_layers: 1
-dropout: 0.1
-use_numeric_value: true
-threshold: 0.5
 {% else %}d_model: 64
-encoder: gru
 num_layers: 1
 dropout: 0.1
 use_numeric_value: true

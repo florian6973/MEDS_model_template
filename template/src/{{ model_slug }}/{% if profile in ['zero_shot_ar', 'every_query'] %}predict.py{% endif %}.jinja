@@ -1,0 +1,146 @@
+"""How this model resolves a task — yours to own, like ``model.py``.
+
+``PredictCommand`` leaves ``resolve`` abstract on purpose: turning a task definition into probabilities
+over a model's *own* outputs is model-specific, and a default returning a constant would produce a
+schema-valid predictions file of pure noise that every downstream check would pass.
+
+The rest of ``predict`` is fixed by the contract and happens around this file: the index is loaded without
+ground truth, coverage is checked, and the output is validated against ``PredictionSchema`` before being
+published. You only supply the probabilities.
+
+The task *definition* is recovered from the task artifact's manifest, so ``predict`` needs no extra
+argument and cannot be handed a definition that disagrees with the materialized labels.
+"""
+
+from pathlib import Path
+
+import polars as pl
+import torch
+from meds_model_base.commands._runtime import KEYS, run_predict_step, split_dataset_and_loader
+from meds_model_base.commands.predict import PROBABILITY_COLUMN, ZeroShotPredictCommand, task_definition_path
+from meds_model_base.tasks import load_task_config
+from meds_model_base.utils import resolve_subdir
+{% if profile == 'zero_shot_ar' %}
+
+class PredictCommand(ZeroShotPredictCommand):
+    """Resolve a task over the model's own generated futures — the MEDS-EIC-AR approach.
+
+    Samples ``n_samples`` trajectories per subject and reports the fraction in which the task's target code
+    appears. That fraction *is* the zero-shot probability: no task-specific training, no calibration, just
+    the model's own beliefs about what happens next.
+
+    Extend this as far as you like — multiple predicates, time windows, a full ACES evaluation over each
+    generated trajectory. What is here is the smallest thing that is genuinely a prediction.
+    """
+
+    #: Sampled futures per subject. More samples, finer probability resolution.
+    n_samples: int = 16
+
+    def resolve(self, cfg, module, index):
+        target = _target_vocab_index(cfg)
+        frames = []
+        for split in index["split"].unique(maintain_order=True).to_list():
+            dataset, dataloader = split_dataset_and_loader(cfg, split)
+            keys = dataset.schema_df.select(KEYS)
+            if not len(keys):
+                continue
+            probs: list[float] = []
+            for batch in dataloader:
+                probs.extend(self._occurrence_probability(module, batch.code, target))
+            frames.append(
+                keys.with_columns(
+                    pl.Series(PROBABILITY_COLUMN, probs, dtype=pl.Float32),
+                    pl.lit(split).alias("split"),
+                )
+            )
+        if not frames:
+            raise ValueError("The datamodule produced no rows for any requested split.")
+        return pl.concat(frames, how="vertical_relaxed").select([*KEYS, "split", PROBABILITY_COLUMN])
+
+    @torch.no_grad()
+    def _occurrence_probability(self, module, codes: torch.Tensor, target: int) -> list[float]:
+        """Fraction of sampled futures in which ``target`` occurs, per row of ``codes``."""
+        hits = torch.zeros(codes.shape[0])
+        for _ in range(self.n_samples):
+            generated = module.generate(codes, module.max_new_tokens, sample=True)
+            future = generated[:, codes.shape[1] :]
+            hits += (future == target).any(dim=1).float().cpu()
+        return (hits / self.n_samples).tolist()
+{% elif profile == 'every_query' %}
+
+class PredictCommand(ZeroShotPredictCommand):
+    """Zero-shot prediction by translating the task definition into a code-occurrence query.
+
+    This *parses* the ACES file into an EveryQuery query rather than running ACES over data: the task's
+    target code becomes a vocabulary index, and the model's occurrence head answers directly.
+
+    Translation is best-effort (the first plain predicate), but failure to translate is an **error**, not a
+    fallback — a query model that cannot express the task has nothing to say about it.
+    """
+
+    def resolve(self, cfg, module, index):
+        column = _target_vocab_index(cfg)
+        frames = []
+        for split in index["split"].unique(maintain_order=True).to_list():
+            keys, outputs = run_predict_step(cfg, module, split)
+            if not len(keys):
+                continue
+            if not outputs or "query_probs" not in outputs[0]:
+                raise ValueError(
+                    "The model's predict_step did not emit `query_probs`, which this prediction queries. "
+                    "Check that model.py still returns it."
+                )
+            probs = torch.cat([o["query_probs"] for o in outputs], dim=0)
+            frames.append(
+                keys.with_columns(
+                    pl.Series(
+                        PROBABILITY_COLUMN,
+                        probs[:, min(column, probs.shape[1] - 1)].float().tolist(),
+                        dtype=pl.Float32,
+                    ),
+                    pl.lit(split).alias("split"),
+                )
+            )
+        if not frames:
+            raise ValueError("The datamodule produced no rows for any requested split.")
+        return pl.concat(frames, how="vertical_relaxed").select([*KEYS, "split", PROBABILITY_COLUMN])
+{% endif %}
+
+def _target_vocab_index(cfg) -> int:
+    """Translate the task definition into a vocabulary index, or fail loudly.
+
+    Every failure here is a real inability to answer the task, so none of them is softened into a default.
+    """
+    task_dir = resolve_subdir(cfg.input_data_dir, cfg.input_task_subdir)
+    definition = task_definition_path(task_dir)
+    if definition is None:
+        raise ValueError(
+            f"The task at {task_dir} was materialized from pre-extracted labels, so it carries no "
+            "definition of *what* to predict. A zero-shot model needs one: re-run preprocess_task with the "
+            "ACES YAML as external_task_file."
+        )
+    code = _first_plain_code(load_task_config(definition))
+    if code is None:
+        raise ValueError(f"No plain-predicate code found in {definition} to resolve against.")
+    vocab = _load_vocab(Path(cfg.input_data_dir) / "patients")
+    if code not in vocab:
+        raise ValueError(
+            f"Task code {code!r} is absent from this cohort's vocabulary, so the task cannot be resolved. "
+            "Only codes seen during preprocess_data can be predicted."
+        )
+    return int(vocab[code])
+
+
+def _first_plain_code(task_cfg) -> str | None:
+    """Return the first plain-predicate code string in an ACES ``TaskExtractorConfig`` (best-effort)."""
+    for pred in (getattr(task_cfg, "predicates", {}) or {}).values():
+        code = getattr(pred, "code", None)
+        if isinstance(code, str):
+            return code
+    return None
+
+
+def _load_vocab(patients_dir: Path) -> dict[str, int]:
+    """Map ``code`` -> ``code/vocab_index`` from the tensorized cohort's ``metadata/codes.parquet``."""
+    codes = pl.read_parquet(patients_dir / "metadata" / "codes.parquet")
+    return dict(zip(codes["code"].to_list(), codes["code/vocab_index"].to_list(), strict=False))

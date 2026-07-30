@@ -95,6 +95,24 @@ def test_render_profile(tmp_path, profile, commands):
             f"{profile} commands.py unexpectedly registers {command}"
         )
 
+    # Model implementations are user-owned, so the contract must ship none of its own.
+    assert not (dst / "src/meds_model_base/profiles").exists(), (
+        "meds_model_base must not contain model implementations; they render into src/<slug>/"
+    )
+
+    # Task resolution is a model's own business, so predict.py renders only where a task must be resolved
+    # over the model's outputs. Everywhere else the shared prediction commands suffice.
+    predict_py = dst / f"src/{slug}/predict.py"
+    assert predict_py.exists() == (profile in {"zero_shot_ar", "every_query"}), (
+        f"{profile}: unexpected predict.py presence ({predict_py.exists()})"
+    )
+
+    # The probe profile owns two modules: the foundation model and the head trained on its embeddings.
+    model_py = (dst / f"src/{slug}/model.py").read_text()
+    assert "class Model(" in model_py
+    assert ("class Probe(" in model_py) == (profile == "probe")
+    assert (dst / f"src/{slug}/configs/model/probe.yaml").exists() == (profile == "probe")
+
     # Every rendered Python module must byte-compile (catches broken Jinja output without importing torch).
     assert compileall.compile_dir(str(dst / "src"), quiet=1, force=True), "rendered code failed to compile"
 
