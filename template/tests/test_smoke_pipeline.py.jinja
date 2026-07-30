@@ -1,18 +1,23 @@
 """Tier 2 — end-to-end pipeline smoke on a tiny real MEDS dataset.
 
-Runs exactly the steps this model implements (read from ``STEPS``), threading each step's output into the
-next, and asserts the ``prediction`` output conforms to ``meds_evaluation.PredictionSchema`` — the
-load-bearing compatibility check with the shared evaluation tool. Trains for 2 epochs on ~6 subjects, so
-it is fast enough to run in CI (not marked ``slow``).
+Runs exactly the chain this model supports (read from ``COMMANDS``), threading each artifact into the next,
+and asserts the ``predict`` output conforms to ``meds_evaluation.PredictionSchema`` — the load-bearing
+compatibility check with the shared evaluation tool. Two epochs on ~6 subjects, so it runs in CI.
+
+Which source each command receives is derived from the registered class's ``supported_sources``, not
+hardcoded per profile. If a profile's wiring and its implementation ever disagree, this test fails rather
+than quietly exercising a different chain than the one the model actually declares.
 """
 import polars as pl
+import pytest
+import yaml
 from meds_evaluation.schema import PredictionSchema
 
-from meds_model_base.steps import StepName
+from meds_model_base.commands import CommandName
 
-from {{ model_slug }}.steps import STEPS
+from {{ model_slug }}.commands import COMMANDS
 
-# Tiny, fast overrides shared by every training step in this test.
+# Tiny, fast overrides shared by every training command in this test.
 _TRAIN = [
     "trainer.max_epochs=2",
     "trainer.accelerator=cpu",
@@ -22,61 +27,127 @@ _TRAIN = [
 ]
 
 
-def test_end_to_end(cli, preprocessed, labels_dir, tmp_path):
-    steps = set(STEPS)
+def _supported(command: CommandName) -> frozenset[str]:
+    """The input sources the class registered for ``command`` declares it handles."""
+    cls = COMMANDS[command]
+    return cls.supported_sources if cls.supported_sources is not None else frozenset(cls.sources)
 
-    pretrain_dir = None
-    if StepName.unsupervised_train in steps:
-        pretrain_dir = tmp_path / "pretrain"
+
+def test_workspace_is_published_with_manifests(data_dir):
+    """preprocess_data and preprocess_task publish self-describing artifacts."""
+    patients = yaml.safe_load((data_dir / "patients" / "manifest.yaml").read_text())
+    assert patients["artifact"]["type"] == "data"
+    assert patients["command"] == "preprocess_data"
+
+    task = yaml.safe_load((data_dir / "tasks" / "task" / "manifest.yaml").read_text())
+    assert task["artifact"]["type"] == "task"
+    assert task["materialization"] == "passed_through"
+    assert task["labels"], "the task manifest should summarize its labels per split"
+
+
+def test_end_to_end(cli, data_dir, tmp_path):
+    pretrained_dir = None
+    if CommandName.pretrain in COMMANDS:
+        pretrained_dir = tmp_path / "pretrained"
         cli([
-            "unsupervised_train",
-            f"tensorized_cohort_dir={preprocessed}",
-            f"output_dir={pretrain_dir}",
+            "pretrain",
+            f"input_data_dir={data_dir}",
+            f"output_pretrained_model_dir={pretrained_dir}",
             *_TRAIN,
         ])
+        assert (pretrained_dir / "manifest.yaml").is_file()
 
-    model_dir = pretrain_dir
-    if StepName.supervised_train in steps:
-        model_dir = tmp_path / "model"
+    inference_subdir = None
+    if CommandName.infer in COMMANDS:
+        assert pretrained_dir is not None, "`infer` requires a pretrained model"
+        inference_subdir = "inference/embeddings"
+        cli([
+            "infer",
+            f"input_data_dir={data_dir}",
+            f"input_pretrained_model_dir={pretrained_dir}",
+            f"output_inference_subdir={inference_subdir}",
+            "batch_size=4",
+            "do_overwrite=true",
+        ])
+        manifest = yaml.safe_load((data_dir / inference_subdir / "manifest.yaml").read_text())
+        # The kind is what makes an inference artifact safely consumable downstream.
+        assert manifest["artifact"]["kind"]
+        assert (data_dir / inference_subdir / "artifacts.parquet").is_file()
+
+    supervised_dir = None
+    if CommandName.supervised_train in COMMANDS:
+        supervised_dir = tmp_path / "supervised"
         args = [
             "supervised_train",
-            f"tensorized_cohort_dir={preprocessed}",
-            f"labels_dir={labels_dir}",
-            f"output_dir={model_dir}",
+            f"input_data_dir={data_dir}",
+            f"output_supervised_model_dir={supervised_dir}",
             *_TRAIN,
         ]
-        if pretrain_dir is not None:
-            args.append(f"model_initialization_dir={pretrain_dir}")
+        sources = _supported(CommandName.supervised_train)
+        if "input_pretrained_model_dir" in sources and pretrained_dir is not None:
+            args.append(f"input_pretrained_model_dir={pretrained_dir}")
+        elif "input_inference_subdir" in sources:
+            assert inference_subdir is not None, "a probe needs materialized inference artifacts"
+            args.append(f"input_inference_subdir={inference_subdir}")
         cli(args)
+        assert (supervised_dir / "manifest.yaml").is_file()
 
-    assert model_dir is not None, "model has neither an unsupervised nor a supervised training step"
+    if CommandName.predict not in COMMANDS:
+        return
 
-    if StepName.task_agnostic_inference in steps:
-        infer_dir = tmp_path / "infer"
-        cli([
-            "task_agnostic_inference",
-            f"tensorized_cohort_dir={preprocessed}",
-            f"index={labels_dir}",
-            f"model_initialization_dir={model_dir}",
-            f"output_dir={infer_dir}",
-            "split=held_out",
-            "batch_size=4",
-        ])
-        assert (infer_dir / "task_agnostic_output.parquet").exists()
+    sources = _supported(CommandName.predict)
+    if "input_supervised_model_dir" in sources:
+        source_arg = f"input_supervised_model_dir={supervised_dir}"
+    elif "input_pretrained_model_dir" in sources:
+        pytest.skip(
+            "Zero-shot prediction needs a task *definition* to resolve, and this fixture supplies "
+            "pre-materialized labels. Exercise it against an ACES task YAML."
+        )
+    else:
+        source_arg = f"input_inference_subdir={inference_subdir}"
 
-    if StepName.prediction in steps:
-        preds_dir = tmp_path / "preds"
-        cli([
-            "prediction",
-            f"tensorized_cohort_dir={preprocessed}",
-            f"index={labels_dir}",
-            f"model_initialization_dir={model_dir}",
-            f"output_dir={preds_dir}",
-            "split=held_out",
-            "batch_size=4",
-        ])
-        preds = pl.read_parquet(preds_dir / "predictions.parquet")
-        # The contract: the model's output is scorable by the shared meds-evaluation tool.
-        PredictionSchema.align(preds.to_arrow())
-        assert "predicted_boolean_probability" in preds.columns
-        assert {"subject_id", "prediction_time"}.issubset(preds.columns)
+    preds_dir = tmp_path / "predictions"
+    cli([
+        "predict",
+        f"input_data_dir={data_dir}",
+        source_arg,
+        f"output_predictions_dir={preds_dir}",
+        "splits=[held_out]",
+        "batch_size=4",
+        "do_overwrite=true",
+    ])
+
+    preds = pl.read_parquet(preds_dir / "predictions.parquet")
+    # The contract: the model's output is scorable by the shared meds-evaluation tool.
+    PredictionSchema.align(preds.to_arrow())
+    assert "predicted_boolean_probability" in preds.columns
+    assert {"subject_id", "prediction_time"}.issubset(preds.columns)
+    # And it never carries ground truth back out.
+    assert "boolean_value" not in preds.columns
+
+    manifest = yaml.safe_load((preds_dir / "manifest.yaml").read_text())
+    coverage = manifest["coverage"]["held_out"]
+    assert coverage["n_written"] == coverage["n_expected"] == len(preds)
+
+
+def test_conflicting_sources_are_rejected(cli, data_dir, tmp_path):
+    """Two prediction sources is an error, not a precedence decision."""
+    if CommandName.predict not in COMMANDS or len(COMMANDS[CommandName.predict].sources) < 2:
+        pytest.skip("this model's predict command has fewer than two possible sources")
+
+    import subprocess
+
+    result = subprocess.run(
+        [
+            "meds-model",
+            "predict",
+            f"input_data_dir={data_dir}",
+            "input_supervised_model_dir=/nonexistent/supervised",
+            "input_pretrained_model_dir=/nonexistent/pretrained",
+            f"output_predictions_dir={tmp_path / 'never'}",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode != 0
+    assert "more than one input source" in (result.stdout + result.stderr)

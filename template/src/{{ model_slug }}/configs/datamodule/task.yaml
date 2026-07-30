@@ -1,0 +1,15 @@
+defaults:
+  - config: MEDSTorchDataConfig
+  - _self_
+
+# Task-conditioned view of the cohort: one sample per (subject_id, prediction_time) in the materialized
+# task, with the sequence ending at that timepoint (TO_END). Used by supervised_train, infer and predict.
+_target_: meds_torchdata.extensions.lightning_datamodule.Datamodule
+config:
+  tensorized_cohort_dir: ${input_data_dir}/patients
+  task_labels_dir: ${input_data_dir}/${input_task_subdir}
+  max_seq_len: ${max_seq_len}
+  seq_sampling_strategy: TO_END
+  static_inclusion_mode: OMIT
+batch_size: ${batch_size}
+num_workers: ${num_workers}

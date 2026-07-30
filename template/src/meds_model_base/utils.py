@@ -1,7 +1,11 @@
-"""Small run-management helpers shared by the training / inference / prediction steps.
+"""Small run-management helpers shared by the training, inference and prediction commands.
 
-Kept dependency-light (omegaconf only at module load; lightning imported lazily) so importing a step
-module doesn't force torch unless it is actually run.
+Artifact directories are published atomically by :mod:`meds_model_base.manifest`, so nothing here writes
+into a final output location. Training, however, needs somewhere durable to keep in-progress checkpoints:
+that is the *work directory*, a scratch sibling of the artifact that survives a crash and is what
+``do_resume`` resumes from. The artifact itself only ever appears complete.
+
+Kept dependency-light (omegaconf only at module load; lightning imported lazily).
 """
 
 from __future__ import annotations
@@ -10,83 +14,98 @@ import logging
 import shutil
 from pathlib import Path
 
-from omegaconf import DictConfig, OmegaConf
-
 logger = logging.getLogger(__name__)
 
-#: Filenames written into a training run's ``output_dir`` / ``model_initialization_dir``.
-CONFIG_FILENAME = "config.yaml"
-RESOLVED_CONFIG_FILENAME = "resolved_config.yaml"
-ENVIRONMENT_FILENAME = "environment.txt"
-BEST_CKPT_FILENAME = "best_model.ckpt"
+#: Name of the checkpoint copied into a published model artifact.
+BEST_CKPT_FILENAME = "checkpoint"
+
+#: Suffix for the scratch directory holding in-progress training state.
+WORK_DIR_SUFFIX = ".work"
 
 
-def save_environment_snapshot(fp: Path) -> None:
-    """Write a ``pip freeze``-style snapshot of installed packages to ``fp`` (best-effort)."""
-    try:
-        from importlib.metadata import distributions
+def work_dir_for(output_dir: Path | str, cfg=None) -> Path:
+    """Resolve the scratch directory for a training run.
 
-        lines = sorted(
-            f"{d.metadata['Name']}=={d.version}" for d in distributions() if d.metadata["Name"] is not None
-        )
-        fp.write_text("\n".join(lines) + "\n")
-    except Exception as e:  # pragma: no cover - snapshot is best-effort
-        logger.warning("Could not write environment snapshot: %s", e)
+    Uses ``cfg.work_dir`` when set, else a sibling of the artifact directory suffixed with ``.work``. This
+    is deliberately *outside* the artifact so that a failed run leaves no partial artifact behind, while
+    still leaving checkpoints on disk to resume from.
 
-
-def save_resolved_config(cfg: DictConfig, fp: Path) -> None:
-    """Save a fully-resolved copy of ``cfg`` (interpolations expanded) to ``fp``."""
-    resolved = OmegaConf.to_container(cfg, resolve=True)
-    OmegaConf.save(OmegaConf.create(resolved), fp)
-
-
-def prepare_output_dir(cfg: DictConfig) -> tuple[Path, Path | None]:
-    """Resolve the run output dir, honoring ``do_overwrite`` / ``do_resume``.
-
-    Returns ``(output_dir, resume_ckpt)`` where ``resume_ckpt`` is a checkpoint to resume from (or None).
-    Raises ``FileExistsError`` if the directory is populated and neither flag is set.
+    Examples:
+        >>> str(work_dir_for("/runs/models/pretrained"))
+        '/runs/models/pretrained.work'
     """
-    output_dir = Path(cfg.output_dir)
-    if output_dir.is_file():
-        raise NotADirectoryError(f"output_dir {output_dir} is a file, not a directory.")
+    if cfg is not None and cfg.get("work_dir"):
+        return Path(cfg.work_dir)
+    output_dir = Path(output_dir)
+    return output_dir.with_name(output_dir.name + WORK_DIR_SUFFIX)
 
-    config_fp = output_dir / CONFIG_FILENAME
+
+def prepare_work_dir(output_dir: Path | str, cfg=None) -> tuple[Path, Path | None]:
+    """Create (or reuse) the work directory; return ``(work_dir, resume_ckpt)``.
+
+    ``resume_ckpt`` is a checkpoint to resume from when ``cfg.do_resume`` is set and one exists. When
+    ``do_resume`` is false any prior scratch state is discarded, so a fresh run never silently inherits
+    checkpoints from an unrelated earlier attempt.
+    """
+    work_dir = work_dir_for(output_dir, cfg)
+    do_resume = bool(cfg.get("do_resume", False)) if cfg is not None else False
+
     resume_ckpt: Path | None = None
-    do_overwrite = bool(cfg.get("do_overwrite", False))
-    do_resume = bool(cfg.get("do_resume", False))
-
-    if config_fp.exists():
-        if do_overwrite:
-            logger.info("Overwriting existing output_dir %s.", output_dir)
-            shutil.rmtree(output_dir, ignore_errors=True)
-        elif do_resume:
-            resume_ckpt = find_checkpoint(output_dir)
-            logger.info("Resuming from %s.", resume_ckpt)
+    if work_dir.exists():
+        if do_resume:
+            resume_ckpt = find_checkpoint(work_dir)
+            if resume_ckpt is not None:
+                logger.info("Resuming training from %s.", resume_ckpt)
+            else:
+                logger.info("do_resume set but no checkpoint in %s; starting fresh.", work_dir)
         else:
-            raise FileExistsError(
-                f"output_dir {output_dir} already exists and is populated. "
-                "Set do_overwrite=True or do_resume=True to proceed."
-            )
-    output_dir.mkdir(parents=True, exist_ok=True)
-    return output_dir, resume_ckpt
+            logger.info("Discarding stale work directory %s (do_resume is false).", work_dir)
+            shutil.rmtree(work_dir, ignore_errors=True)
+    work_dir.mkdir(parents=True, exist_ok=True)
+    return work_dir, resume_ckpt
 
 
-def find_checkpoint(run_dir: Path) -> Path | None:
-    """Find a checkpoint to resume/load from a run dir (``best_model.ckpt`` → ``last.ckpt`` → newest)."""
+def find_checkpoint(run_dir: Path | str) -> Path | None:
+    """Find a checkpoint in a run or work dir (``checkpoint`` → ``last.ckpt`` → most recent ``*.ckpt``)."""
     run_dir = Path(run_dir)
     best = run_dir / BEST_CKPT_FILENAME
     if best.is_file():
         return best
     ckpts = sorted(run_dir.rglob("*.ckpt"), key=lambda p: p.stat().st_mtime, reverse=True)
-    for name in ("last.ckpt",):
-        for c in ckpts:
-            if c.name == name:
-                return c
+    for c in ckpts:
+        if c.name == "last.ckpt":
+            return c
     return ckpts[0] if ckpts else None
 
 
-def write_run_metadata(cfg: DictConfig, output_dir: Path) -> None:
-    """Persist ``config.yaml`` + ``resolved_config.yaml`` + ``environment.txt`` for a fresh run."""
-    OmegaConf.save(cfg, output_dir / CONFIG_FILENAME)
-    save_resolved_config(cfg, output_dir / RESOLVED_CONFIG_FILENAME)
-    save_environment_snapshot(output_dir / ENVIRONMENT_FILENAME)
+def require_checkpoint(model_dir: Path | str) -> Path:
+    """Like :func:`find_checkpoint` but raises with an actionable message instead of returning None."""
+    ckpt = find_checkpoint(model_dir)
+    if ckpt is None:
+        raise FileNotFoundError(
+            f"No checkpoint found in {model_dir}. Expected a {BEST_CKPT_FILENAME!r} file written by a "
+            "`pretrain` or `supervised_train` run."
+        )
+    return ckpt
+
+
+def resolve_subdir(data_dir: Path | str, subdir: str | None) -> Path | None:
+    """Resolve a ``*_subdir`` against the shared ``data_dir``; ``None`` passes through.
+
+    Subdirectory arguments are always relative to ``data_dir`` — an absolute path is a caller error, since
+    task and inference artifacts live inside the shared workspace by construction.
+
+    Examples:
+        >>> str(resolve_subdir("/runs/data", "tasks/mortality"))
+        '/runs/data/tasks/mortality'
+        >>> resolve_subdir("/runs/data", None) is None
+        True
+    """
+    if subdir is None:
+        return None
+    p = Path(subdir)
+    if p.is_absolute():
+        raise ValueError(
+            f"Subdirectory arguments are relative to data_dir, but got the absolute path {subdir!r}."
+        )
+    return Path(data_dir) / p

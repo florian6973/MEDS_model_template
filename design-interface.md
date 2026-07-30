@@ -64,19 +64,28 @@ Model-specific task columns are allowed.
 ```text
 data_dir/
 ├── patients/
+│   ├── metadata/
+│   └── manifest.yaml
 ├── tasks/
 │   └── <task_name>/
 │       ├── train.parquet
 │       ├── tuning.parquet
-│       └── held_out.parquet
-├── inference/
-│   └── <inference_name>/
-│       ├── artifacts.parquet
+│       ├── held_out.parquet
 │       └── manifest.yaml
-└── manifest.yaml
+└── inference/
+    └── <inference_name>/
+        ├── artifacts.parquet
+        └── manifest.yaml
 ```
 
 The patient data is created once. Task preprocessing and inference add new subdirectories without copying the patient data.
+
+There is deliberately **no `data_dir/manifest.yaml`**. Every artifact directory is self-describing, and the
+state of a `data_dir` is derived by scanning `tasks/*/manifest.yaml` and `inference/*/manifest.yaml`. A
+root manifest would have to be rewritten every time a task or inference subdirectory is added, which is a
+write-write race as soon as two jobs materialize different tasks against the same `data_dir` concurrently
+— the normal case on a cluster. Scanning has no such hazard: each subdirectory is written once, atomically,
+by exactly one job.
 
 ### Pretrained model directory
 
@@ -118,7 +127,82 @@ Rules:
 * Existing task and inference subdirectories are immutable.
 * Commands must fail when the requested output subdirectory already exists, unless overwrite is explicitly enabled.
 * Writes should use a temporary directory followed by an atomic rename.
-* Every artifact should record its provenance in a manifest.
+* Every artifact directory records its own provenance in a `manifest.yaml`. Because the directory is renamed into place atomically, a visible artifact always has a complete manifest — a half-written artifact is never observable.
+
+### Write access
+
+| Command | `data_dir` access |
+| --- | --- |
+| `preprocess_data` | creates it |
+| `preprocess_task` | appends `tasks/<task_name>/` |
+| `infer` | appends `inference/<inference_name>/` |
+| `pretrain`, `supervised_train`, `predict` | read-only |
+
+The read-only commands write only to their own `output_*_dir` roots. This matters operationally: `pretrain`,
+`supervised_train` and `predict` can run against a read-only mount or a bucket with no write policy.
+
+---
+
+## Manifests
+
+A manifest is not documentation. Commands **read the manifests of their inputs and validate them before
+doing any work**, so a mismatched artifact fails in a second rather than after an hour on a GPU. That
+validation is the reason the format is worth specifying; a manifest nobody reads will rot.
+
+The base package should provide `write_manifest()` (temporary directory + atomic rename) and
+`read_manifest(path, require_type=...)`, so input validation is one line at the top of each command and no
+model implementation can skip it.
+
+### Common fields
+
+Present in every manifest, whatever the artifact type:
+
+```yaml
+manifest_version: 1
+artifact:
+  type: inference                 # data | task | inference | pretrained_model | supervised_model | predictions
+  name: pretrained_embeddings
+created_at: 2026-07-30T14:02:11Z  # UTC, ISO 8601
+command: infer
+provenance:
+  model_package: {name: my_model, version: 0.1.0}
+  template_commit: 9d37393        # from .copier-answers.yml `_commit`
+  git: {commit: abc1234, dirty: false}
+  env:
+    python: "3.12"
+    packages: {meds: "0.4.1", meds-torch-data: "0.9.0", torch: "2.6.0"}
+inputs:                           # every input artifact, by role — this is what makes the DAG verifiable
+  - {role: input_data_dir, path: /runs/ex/data, manifest_digest: "sha256:…"}
+  - {role: input_pretrained_model_dir, path: /runs/ex/models/pretrained, manifest_digest: "sha256:…"}
+config:
+  resolved: resolved_config.yaml
+  digest: "sha256:…"
+outputs:
+  - {file: artifacts.parquet, rows: 41233, digest: "sha256:…"}
+```
+
+Recording each input's `manifest_digest` means a downstream command can detect that it is being run against
+a *different* artifact than the one its sibling used, rather than silently producing an incoherent result.
+
+### Type-specific fields
+
+| Artifact type | Additional fields |
+| --- | --- |
+| `data` (`patients/`) | source `external_meds_dir`; subject count per split; vocabulary size; tensorization parameters |
+| `task` | source `external_task_file`; `materialization: aces_extracted \| passed_through` (which of the two `external_task_file` forms was supplied); label count and positive rate per split; `prediction_time` range |
+| `inference` | **`kind`** — `embeddings \| trajectories \| hazards \| scores \| token_probabilities`; column schema (name → dtype → shape); the task subdirectory used, if any |
+| `pretrained_model`, `supervised_model` | checkpoint digest; monitored metric and best score; epochs, steps, seed; if warm-started: source directory **and the number of parameters actually matched** |
+| `predictions` | **which prediction source was used** (see the arbitration rule under `predict`); `n_expected` and `n_written` per split; splits covered |
+
+Two of those exist specifically to convert silent-wrong-answer failures into loud ones. Recording the
+matched-parameter count on a warm start catches a checkpoint that loaded nothing and left the model randomly
+initialized. Recording `n_expected` against `n_written` catches predictions that silently cover only part of
+the task index.
+
+Note that *which commands a model supports* is a property of the model package, not of any artifact, so it is
+declared in the implementation and surfaced by `meds-model commands` — not in a manifest (see *Profiles*).
+Because `patients/` is a model-specific representation, its manifest records the `model_package` that
+produced it under `provenance`, which is what lets a command reject a `data_dir` built by a different model.
 
 ---
 
@@ -145,8 +229,8 @@ Output:
 
 ```text
 output_data_dir/patients/
-output_data_dir/metadata/
-output_data_dir/manifest.yaml
+output_data_dir/patients/metadata/
+output_data_dir/patients/manifest.yaml
 ```
 
 ---
@@ -291,7 +375,16 @@ task data + inference artifacts → supervised model
 
 `input_inference_subdir` is provided.
 
-Both optional inputs may be supported for specialized hybrid methods, but ordinary profiles should use at most one.
+#### Argument arbitration
+
+Let `n` be the number of non-null values among `input_pretrained_model_dir` and `input_inference_subdir`.
+
+* `n > 1` → error, naming both. Specialized hybrid methods that genuinely consume both must opt in explicitly by declaring so in the implementation; the default is to reject.
+* `n == 1` → the source must be one the implementation declares support for. A from-scratch-only model handed an `input_pretrained_model_dir` must error, not silently ignore it.
+* `n == 0` → train from scratch.
+
+The check belongs in the shared command wrapper, before dispatch to the model hook, so no implementation can
+bypass it. The resolved source is recorded in the output model manifest.
 
 ---
 
@@ -313,6 +406,12 @@ Optional prediction sources:
 input_pretrained_model_dir: null
 input_supervised_model_dir: null
 input_inference_subdir: null
+```
+
+Optional parameter:
+
+```yaml
+splits: null    # null → every split present in the task subdirectory
 ```
 
 Supported cases:
@@ -341,7 +440,28 @@ task data + inference artifacts → predictions
 task data + implementation-owned model → predictions
 ```
 
-This covers PFN-style models whose weights are packaged with the repository. No external model-path argument is required in that case, but the implementation must still declare the packaged model in its manifest.
+This covers PFN-style models whose weights are packaged with the repository. No external model-path argument is required in that case, but the implementation must still declare the packaged model, and the identifier of that model is recorded in the predictions manifest.
+
+#### Argument arbitration
+
+Let `n` be the number of non-null values among `input_pretrained_model_dir`, `input_supervised_model_dir`
+and `input_inference_subdir`.
+
+* `n > 1` → error, naming the conflicting sources. There is no precedence order; ambiguity is a caller bug.
+* `n == 1` → the source must be one the implementation declares support for. A supervised-only model handed an `input_pretrained_model_dir` must error rather than ignore it.
+* `n == 0` → valid **only** if the implementation declares a packaged model. Otherwise error, listing the sources it does support.
+
+As with `supervised_train`, the check runs in the shared command wrapper before dispatch, and the resolved
+source is recorded in the predictions manifest.
+
+#### Coverage
+
+`predict` produces one row per row of the selected splits of `input_task_subdir`. It must fail if it cannot,
+rather than emitting a short file: silently dropping index rows that the model happens not to cover turns a
+partial run into a plausible-looking complete one. The manifest records `n_expected` and `n_written` per
+split so the invariant is checkable after the fact.
+
+`splits` exists because a caller may want held-out predictions only; the default is every split present.
 
 The output must contain a standardized:
 
@@ -422,6 +542,39 @@ preprocess_data
 → preprocess_task
 → predict using packaged model
 ```
+
+---
+
+## Profiles
+
+A profile is a **configuration**, not a code-generation branch.
+
+Every generated repository ships all six commands. What distinguishes one profile from another is only which
+commands are called and which optional inputs are supplied — and the parameter matrix below already captures
+both. So a profile reduces to one config file:
+
+```yaml
+# configs/profile/motor_finetune.yaml
+supervised_train:
+  input_pretrained_model_dir: ${models.pretrained}
+predict:
+  input_supervised_model_dir: ${models.supervised}
+```
+
+This matters because the alternative is what the current template does: a `profile` question presets a set of
+`implements_*` booleans that then gate conditionals in the steps registry, the model module, the dependency
+list, which config roots render, the MEDS-DEV specification, and the tests — with the profile-to-step mapping
+duplicated once more in the template's own test suite. Adding a profile means editing all of them in sync.
+Under the DAG, none of that branching is needed for the *interface*.
+
+Two things remain genuinely model-specific and are still generated:
+
+* the model class in the user-owned module (an autoregressive model and a supervised classifier are different code);
+* the MEDS-DEV specification, whose command strings differ per profile.
+
+The implementation also declares which commands it supports — the concern the current template's `STEPS`
+registry serves — but as a flat list surfaced by `meds-model commands`, rather than as conditional imports.
+An unsupported command exits with a clear error naming what the model does support.
 
 ---
 
@@ -517,7 +670,10 @@ template defaults
 | `pretrain`         | `input_data_dir`, `output_pretrained_model_dir`                           | —                                                                                    |
 | `infer`            | `input_data_dir`, `input_pretrained_model_dir`, `output_inference_subdir` | `input_task_subdir`                                                                  |
 | `supervised_train` | `input_data_dir`, `input_task_subdir`, `output_supervised_model_dir`      | `input_pretrained_model_dir`, `input_inference_subdir`                               |
-| `predict`          | `input_data_dir`, `input_task_subdir`, `output_predictions_dir`           | `input_pretrained_model_dir`, `input_supervised_model_dir`, `input_inference_subdir` |
+| `predict`          | `input_data_dir`, `input_task_subdir`, `output_predictions_dir`           | `input_pretrained_model_dir`, `input_supervised_model_dir`, `input_inference_subdir`, `splits` |
+
+For `supervised_train` and `predict`, the optional model/inference sources are mutually exclusive; see the
+argument arbitration rules in each command's section.
 
 ---
 
@@ -533,3 +689,21 @@ template defaults
 8. Model-specific preprocessing does not expand the global interface.
 9. `infer` is optional and may occur before supervised training or prediction.
 10. The command graph is a DAG, not one mandatory linear pipeline.
+11. Each artifact directory carries its own manifest; there is no aggregate manifest to keep in sync.
+12. Where a command accepts several alternative sources, exactly one is valid and the rest are an error — never a silent precedence.
+13. A profile is a configuration, not a code path.
+
+---
+
+## Open questions
+
+**MEDS-DEV mapping.** MEDS-DEV drives a `{unsupervised, supervised} × {train, predict}` command grid, passes
+a `labels_dir` directly, and has no slot for a separate task-materialization step. Six commands and a DAG need
+an explicit projection onto that grid — in particular where `preprocess_task` runs, and whether the
+`data_dir` survives between the train and predict invocations. This should be settled against a live
+MEDS-DEV run before the interface is frozen.
+
+**`infer` from non-pretrained sources.** `input_pretrained_model_dir` is required, so representations cannot
+be materialized from a supervised model or a packaged model. This is deliberate: the packaged-model path is
+served by `predict`, and probing a task-supervised model's representations is rare enough not to design for
+now. Revisit only if a concrete model needs it.

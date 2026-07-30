@@ -1,8 +1,8 @@
-"""Shared test fixtures: a real tiny MEDS dataset (meds-testing-helpers) driven through the CLI.
+"""Shared fixtures: a real tiny MEDS dataset (meds-testing-helpers) driven through the CLI.
 
-The ``simple_static_MEDS_dataset_with_task`` fixture is provided automatically by ``meds_testing_helpers``
-(a pytest plugin) — no import needed. We run the model's *actual* ``meds-model`` steps over it via
-subprocess, exactly as a user would.
+The ``simple_static_MEDS_dataset_with_task`` fixture comes from ``meds_testing_helpers`` (a pytest plugin)
+— no import needed. Commands run via subprocess, exactly as a user would run them, so the tests exercise
+the real dispatcher, config composition and artifact publication rather than internal calls.
 """
 import subprocess
 from pathlib import Path
@@ -34,8 +34,8 @@ def meds_root(simple_static_MEDS_dataset_with_task) -> Path:
 
 
 @pytest.fixture(scope="session")
-def labels_dir(meds_root) -> Path:
-    """The task-labels dir inside the fixture (``subject_id, prediction_time, boolean_value``)."""
+def external_task_file(meds_root) -> Path:
+    """Pre-materialized task labels inside the fixture (subject_id, prediction_time, boolean_value)."""
     task_root = meds_root / "task_labels"
     tasks = sorted(p for p in task_root.iterdir() if p.is_dir())
     assert tasks, f"No task_labels/* directory under {meds_root}"
@@ -43,16 +43,20 @@ def labels_dir(meds_root) -> Path:
 
 
 @pytest.fixture(scope="session")
-def preprocessed(meds_root, tmp_path_factory) -> Path:
-    """Run ``meds-model preprocess`` once and return the tensorized cohort dir."""
-    out = tmp_path_factory.mktemp("preprocessed")
-    run_cli(
-        [
-            "preprocess",
-            f"input_dir={meds_root}",
-            f"output_dir={out}",
-            "do_reshard=true",
-            "do_overwrite=true",
-        ]
-    )
-    return out
+def data_dir(meds_root, external_task_file, tmp_path_factory) -> Path:
+    """A shared workspace with patients/ and one materialized task, built once for the session."""
+    workspace = tmp_path_factory.mktemp("workspace") / "data"
+    run_cli([
+        "preprocess_data",
+        f"external_meds_dir={meds_root}",
+        f"output_data_dir={workspace}",
+        "do_reshard=true",
+        "do_overwrite=true",
+    ])
+    run_cli([
+        "preprocess_task",
+        f"input_data_dir={workspace}",
+        f"external_task_file={external_task_file}",
+        "do_overwrite=true",
+    ])
+    return workspace

@@ -20,7 +20,10 @@ _envops:
 # Files the user is expected to hand-edit: never overwritten by `copier update`.
 _skip_if_exists:
   - "src/{{ model_slug }}/model.py"
+  - "src/{{ model_slug }}/commands.py"
   - "src/{{ model_slug }}/configs/model/**"
+  - "src/{{ model_slug }}/configs/paths/**"
+  - "src/{{ model_slug }}/configs/profile/**"
 
 _exclude:
   - "*.pyc"
@@ -48,7 +51,7 @@ _message_after_copy: |
     cd {{ _copier_conf.dst_path }}
     uv sync --all-extras               # install dependencies
     uv run pre-commit install          # (optional) enable pre-commit hooks
-    uv run meds-model steps            # list the steps this model implements
+    uv run meds-model commands         # list the commands this model supports
     uv run pytest -m "not slow"        # smoke tests
 
 _message_after_update: |
@@ -98,43 +101,39 @@ python_version:
 
 profile:
   type: str
-  help: "Which of the five steps this model implements (presets the implements_* toggles below)"
+  help: "Which chain of commands this model uses (see docs: every model ships all six)"
   choices:
-    "supervised-basic — preprocess, supervised_train, prediction {a,c,e}": "supervised_basic"
-    "zero-shot autoregressive — a,b,d,e (like MEDS-EIC-AR)": "zero_shot_ar"
-    "every-query — a,b,e (query-conditioned pretraining)": "every_query"
-    "MOTOR-style fine-tune — a,b,c,e (time-to-event pretrain + fine-tune)": "motor_finetune"
-    "custom — choose each step yourself": "custom"
+    "supervised-basic — preprocess_data, preprocess_task, supervised_train, predict": "supervised_basic"
+    "zero-shot autoregressive — pretrain, infer trajectories, zero-shot predict (like MEDS-EIC-AR)": "zero_shot_ar"
+    "every-query — query-conditioned pretraining, predict by native query": "every_query"
+    "MOTOR-style fine-tune — time-to-event pretrain, then supervised fine-tune": "motor_finetune"
+    "frozen probe — pretrain, infer embeddings, train a head on them": "probe"
+    "custom — choose each command yourself": "custom"
   default: "supervised_basic"
 
-# Individual step toggles. Auto-derived from `profile`; only *asked* when profile == custom.
-implements_preprocess:
+# Command toggles, only *asked* for the custom profile. `preprocess_data` and `preprocess_task` are always
+# supported: every chain starts by materializing patient data and a task.
+implements_pretrain:
   type: bool
-  help: "Implement the `preprocess` step?"
-  default: "{{ profile != 'custom' }}"
+  help: "Support the `pretrain` command (foundation-model pretraining)?"
+  default: "{{ profile in ['zero_shot_ar', 'every_query', 'motor_finetune', 'probe'] }}"
   when: "{{ profile == 'custom' }}"
 
-implements_unsupervised_train:
+implements_infer:
   type: bool
-  help: "Implement the `unsupervised_train` step?"
-  default: "{{ profile in ['zero_shot_ar', 'every_query', 'motor_finetune'] }}"
+  help: "Support the `infer` command (materialize embeddings / trajectories / scores)?"
+  default: "{{ profile in ['zero_shot_ar', 'probe'] }}"
   when: "{{ profile == 'custom' }}"
 
 implements_supervised_train:
   type: bool
-  help: "Implement the `supervised_train` step?"
-  default: "{{ profile in ['supervised_basic', 'motor_finetune'] }}"
+  help: "Support the `supervised_train` command?"
+  default: "{{ profile in ['supervised_basic', 'motor_finetune', 'probe'] }}"
   when: "{{ profile == 'custom' }}"
 
-implements_task_agnostic_inference:
+implements_predict:
   type: bool
-  help: "Implement the `task_agnostic_inference` step?"
-  default: "{{ profile == 'zero_shot_ar' }}"
-  when: "{{ profile == 'custom' }}"
-
-implements_prediction:
-  type: bool
-  help: "Implement the `prediction` step? (required for MEDS-DEV)"
+  help: "Support the `predict` command? (required for MEDS-DEV)"
   default: true
   when: "{{ profile == 'custom' }}"
 

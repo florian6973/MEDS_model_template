@@ -6,12 +6,16 @@ users should not edit it (edit ``src/<your_model>/`` instead).
 
 Public surface:
 
+- :mod:`meds_model_base.commands` — ``CommandName``, the ``MEDSModelCommand`` ABCs, source arbitration,
+  and the default implementations of the six commands.
+- :mod:`meds_model_base.manifest` — artifact manifests: atomic publication, provenance, input validation.
 - :mod:`meds_model_base.schemas` — canonical + template schemas and validators.
-- :mod:`meds_model_base.steps` — ``StepName``, the ``MEDSModelStep`` ABCs, and the default step classes.
+- :mod:`meds_model_base.tasks` — turning an external task file into split label parquets.
 - :mod:`meds_model_base.dispatch` — ``make_cli`` (the ``meds-model`` dispatcher) and ``register_resolvers``.
 
-Note: importing heavy submodules (``steps``, ``lightning``, ``dispatch``) pulls in torch / lightning /
-meds-torch-data; :mod:`meds_model_base.schemas` is dependency-light and safe to import on its own.
+Note: importing the default command implementations (or ``lightning`` / ``dispatch``) pulls in torch /
+lightning / meds-torch-data. :mod:`meds_model_base.schemas`, :mod:`meds_model_base.manifest` and
+:mod:`meds_model_base.commands.base` are dependency-light and safe to import on their own.
 """
 
 __version__ = "0.1.0"

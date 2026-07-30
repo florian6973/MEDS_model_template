@@ -1,0 +1,50 @@
+{%- set entries = [
+  ('preprocess_data', 'DefaultPreprocessDataCommand'),
+  ('preprocess_task', 'DefaultPreprocessTaskCommand'),
+] -%}
+{%- if profile == 'supervised_basic' -%}
+  {%- set _ = entries.append(('supervised_train', 'DefaultSupervisedTrainCommand')) -%}
+  {%- set _ = entries.append(('predict', 'SupervisedPredictCommand')) -%}
+{%- elif profile == 'zero_shot_ar' -%}
+  {%- set _ = entries.append(('pretrain', 'DefaultPretrainCommand')) -%}
+  {%- set _ = entries.append(('infer', 'DefaultInferCommand')) -%}
+  {%- set _ = entries.append(('predict', 'AutoregressiveZeroShotPredictCommand')) -%}
+{%- elif profile == 'every_query' -%}
+  {%- set _ = entries.append(('pretrain', 'DefaultPretrainCommand')) -%}
+  {%- set _ = entries.append(('predict', 'EveryQueryPredictCommand')) -%}
+{%- elif profile == 'motor_finetune' -%}
+  {%- set _ = entries.append(('pretrain', 'DefaultPretrainCommand')) -%}
+  {%- set _ = entries.append(('supervised_train', 'DefaultSupervisedTrainCommand')) -%}
+  {%- set _ = entries.append(('predict', 'SupervisedPredictCommand')) -%}
+{%- elif profile == 'probe' -%}
+  {%- set _ = entries.append(('pretrain', 'DefaultPretrainCommand')) -%}
+  {%- set _ = entries.append(('infer', 'DefaultInferCommand')) -%}
+  {%- set _ = entries.append(('supervised_train', 'ProbeTrainCommand')) -%}
+  {%- set _ = entries.append(('predict', 'ProbePredictCommand')) -%}
+{%- else -%}
+  {%- if implements_pretrain -%}{%- set _ = entries.append(('pretrain', 'DefaultPretrainCommand')) -%}{%- endif -%}
+  {%- if implements_infer -%}{%- set _ = entries.append(('infer', 'DefaultInferCommand')) -%}{%- endif -%}
+  {%- if implements_supervised_train -%}{%- set _ = entries.append(('supervised_train', 'DefaultSupervisedTrainCommand')) -%}{%- endif -%}
+  {%- if implements_predict -%}{%- set _ = entries.append(('predict', 'SupervisedPredictCommand')) -%}{%- endif -%}
+{%- endif -%}
+{%- set profile_classes = ['EveryQueryPredictCommand', 'AutoregressiveZeroShotPredictCommand'] -%}
+{%- set base_imports = ['CommandName'] + (entries | map(attribute=1) | reject('in', profile_classes) | list | unique | sort | list) -%}
+"""Which of the six commands this model supports ({{ profile }} profile).
+
+The ``COMMANDS`` registry maps each supported
+:class:`~meds_model_base.commands.base.CommandName` to the class implementing it. ``meds-model`` consults
+it: an unsupported command exits with a message naming what *is* supported.
+
+This is the one piece of the profile that has to be Python rather than configuration — the dispatcher needs
+it before Hydra composes anything. Edit it freely: swap in your own subclass, add a command, or drop one.
+Nothing else in the repository branches on the profile.
+"""
+from meds_model_base.commands import (
+{% for name in base_imports %}    {{ name }},
+{% endfor %})
+{% if 'EveryQueryPredictCommand' in (entries | map(attribute=1) | list) %}from meds_model_base.profiles.every_query import EveryQueryPredictCommand
+{% endif %}{% if 'AutoregressiveZeroShotPredictCommand' in (entries | map(attribute=1) | list) %}from meds_model_base.profiles.autoregressive import AutoregressiveZeroShotPredictCommand
+{% endif %}
+COMMANDS = {
+{% for command, cls in entries %}    CommandName.{{ command }}: {{ cls }},
+{% endfor %}}

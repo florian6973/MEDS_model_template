@@ -1,7 +1,14 @@
-"""The model — your editable surface. Subclass or override freely; the CLI contract is unaffected.
+"""The model — your editable surface. Subclass or override freely; the command contract is unaffected.
 
 Rendered for the ``{{ profile }}`` profile. Swap the base class, add layers, change ``compute_loss`` /
-``predict_step`` — as long as it stays a ``LightningModule`` the ``meds-model`` steps keep working.
+``predict_step`` / ``infer_step`` — as long as it stays a ``LightningModule`` the ``meds-model`` commands
+keep working.
+
+Two hooks decide what the model offers downstream:
+
+- ``predict_step`` — task probabilities, consumed by ``predict``.
+- ``infer_step`` + ``inference_kind`` — reusable per-timepoint artifacts, consumed by ``infer``. The
+  default emits the pooled representation as ``embedding``, which is what a probe consumes.
 """
 {% if profile == 'zero_shot_ar' %}
 from meds_model_base.profiles.autoregressive import AutoregressiveModel
@@ -21,6 +28,16 @@ from meds_model_base.profiles.motor import MotorModel
 
 class Model(MotorModel):
     """A MOTOR-style time-to-event model (TTE pretraining + supervised fine-tuning)."""
+{% elif profile == 'probe' %}
+from meds_model_base.profiles.supervised import SupervisedClassifier
+
+
+class Model(SupervisedClassifier):
+    """The foundation model whose representations are probed.
+
+    ``pretrain`` fits it, ``infer`` materializes ``encode(batch)`` as embeddings, and the probe trained on
+    those embeddings is a separate, much smaller module (``meds_model_base.lightning.probe.LinearProbe``).
+    """
 {% else %}
 from meds_model_base.profiles.supervised import SupervisedClassifier
 

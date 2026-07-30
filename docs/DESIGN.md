@@ -1,5 +1,17 @@
 # MEDS Model Template — Design
 
+> [!IMPORTANT]
+> **Superseded in part by [`../design-interface.md`](../design-interface.md).** That document is the
+> authoritative specification of the command and artifact interface: six commands forming a DAG
+> (`preprocess_data`, `preprocess_task`, `pretrain`, `infer`, `supervised_train`, `predict`), the shared
+> `data_dir` workspace, per-artifact manifests, and the argument-arbitration and coverage rules.
+>
+> This document remains useful for **background**: why Copier, why a vendored base package, the verified
+> MEDS-ecosystem API surface, and the testing strategy. But wherever it describes the older five-step CLI
+> (`preprocess`, `unsupervised_train`, `supervised_train`, `task_agnostic_inference`, `prediction`), the
+> command names, arguments and artifact layout are out of date. Its repository-layout section also
+> describes several files that were never implemented.
+
 This document is the authoritative design for `MEDS_model_template`: a
 [Copier](https://copier.readthedocs.io) template that generates **standards-conformant MEDS model
 repositories** exposing a *mandated* five-step CLI, so that any model built from it has the same usage
@@ -69,11 +81,13 @@ class StepName(StrEnum):
     task_agnostic_inference = "task_agnostic_inference"
     prediction = "prediction"
 
+
 class MEDSModelStep(ABC):
     name: ClassVar[StepName]
-    config_name: ClassVar[str]          # Hydra root config, e.g. "_prediction"
+    config_name: ClassVar[str]  # Hydra root config, e.g. "_prediction"
+
     @abstractmethod
-    def run(self, cfg: DictConfig) -> Path: ...   # execute; return primary output dir
+    def run(self, cfg: DictConfig) -> Path: ...  # execute; return primary output dir
 ```
 
 Per-step ABCs pin the IO contract and expose the override hook(s) the default implementations fill
@@ -88,7 +102,7 @@ consults it; a non-implemented step exits cleanly. Copier's `profile` question p
 
 ```python
 from meds import DataSchema, LabelSchema, SubjectSplitSchema, CodeMetadataSchema
-from meds_evaluation.schema import PredictionSchema     # subclass of LabelSchema
+from meds_evaluation.schema import PredictionSchema  # subclass of LabelSchema
 # IndexSchema             = LabelSchema restricted to (subject_id, prediction_time)   [validate-only]
 # TaskAgnosticOutputSchema = flexible_schema OPEN class over those two keys + model columns
 ```

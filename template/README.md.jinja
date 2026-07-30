@@ -3,7 +3,7 @@
 {{ model_description }}
 
 A MEDS model generated from [MEDS_model_template](https://github.com/mmcdermott/MEDS_model_template)
-(`{{ profile }}` profile). It exposes the mandated `meds-model` CLI and is contributable to
+(`{{ profile }}` profile). It exposes the standard `meds-model` command interface and is contributable to
 [MEDS-DEV](https://github.com/Medical-Event-Data-Standard/MEDS-DEV).
 
 ## Install
@@ -12,30 +12,86 @@ A MEDS model generated from [MEDS_model_template](https://github.com/mmcdermott/
 uv sync --all-extras
 ```
 
+## The command graph
+
+Six commands form a DAG, not a fixed pipeline. Run `meds-model commands` to see which this model supports.
+
+| Command | Reads | Writes |
+|---|---|---|
+| `preprocess_data` | an external MEDS dataset | `<data_dir>/patients/` |
+| `preprocess_task` | a task file (ACES YAML or labels) | `<data_dir>/tasks/<name>/` |
+| `pretrain` | patient data | a pretrained model directory |
+| `infer` | patient data + a pretrained model | `<data_dir>/inference/<name>/` |
+| `supervised_train` | patient data + a task (+ at most one prior artifact) | a supervised model directory |
+| `predict` | patient data + a task + exactly one source | `predictions.parquet` |
+
+`data_dir` is a shared workspace: `patients/` is written once and never modified, while `preprocess_task`
+and `infer` append sibling subdirectories. Every artifact directory carries a `manifest.yaml` recording
+what produced it and from which inputs, and is published atomically — so a directory that exists is a
+directory that finished.
+
 ## Usage
 
-This model implements the following steps (run `meds-model steps` to confirm):
-
 ```bash
-{% if implements_preprocess %}meds-model preprocess input_dir=$MEDS_ROOT output_dir=data do_reshard=true
-{% endif %}{% if implements_unsupervised_train %}meds-model unsupervised_train tensorized_cohort_dir=data output_dir=runs/pretrain
-{% endif %}{% if implements_supervised_train %}meds-model supervised_train tensorized_cohort_dir=data labels_dir=$LABELS output_dir=runs/model{% if implements_unsupervised_train %} model_initialization_dir=runs/pretrain{% endif %}
-{% endif %}{% if implements_task_agnostic_inference %}meds-model task_agnostic_inference tensorized_cohort_dir=data index=$INDEX model_initialization_dir=runs/model output_dir=runs/infer
-{% endif %}{% if implements_prediction %}meds-model prediction tensorized_cohort_dir=data index=$INDEX task=$ACES_YAML model_initialization_dir=runs/model output_dir=runs/preds
+{% if profile == 'supervised_basic' %}meds-model preprocess_data  external_meds_dir=$MEDS_ROOT output_data_dir=runs/data
+meds-model preprocess_task  input_data_dir=runs/data external_task_file=$TASK
+meds-model supervised_train input_data_dir=runs/data output_supervised_model_dir=runs/models/supervised
+meds-model predict          input_data_dir=runs/data input_supervised_model_dir=runs/models/supervised \
+                            output_predictions_dir=runs/predictions
+{% elif profile == 'zero_shot_ar' %}meds-model preprocess_data external_meds_dir=$MEDS_ROOT output_data_dir=runs/data
+meds-model pretrain        input_data_dir=runs/data output_pretrained_model_dir=runs/models/pretrained
+meds-model preprocess_task input_data_dir=runs/data external_task_file=$ACES_YAML
+meds-model infer           input_data_dir=runs/data input_pretrained_model_dir=runs/models/pretrained
+meds-model predict         input_data_dir=runs/data input_pretrained_model_dir=runs/models/pretrained \
+                           output_predictions_dir=runs/predictions
+{% elif profile == 'every_query' %}meds-model preprocess_data external_meds_dir=$MEDS_ROOT output_data_dir=runs/data
+meds-model pretrain        input_data_dir=runs/data output_pretrained_model_dir=runs/models/pretrained
+meds-model preprocess_task input_data_dir=runs/data external_task_file=$ACES_YAML
+meds-model predict         input_data_dir=runs/data input_pretrained_model_dir=runs/models/pretrained \
+                           output_predictions_dir=runs/predictions
+{% elif profile == 'motor_finetune' %}meds-model preprocess_data  external_meds_dir=$MEDS_ROOT output_data_dir=runs/data
+meds-model pretrain         input_data_dir=runs/data output_pretrained_model_dir=runs/models/pretrained
+meds-model preprocess_task  input_data_dir=runs/data external_task_file=$TASK
+meds-model supervised_train input_data_dir=runs/data input_pretrained_model_dir=runs/models/pretrained \
+                            output_supervised_model_dir=runs/models/supervised
+meds-model predict          input_data_dir=runs/data input_supervised_model_dir=runs/models/supervised \
+                            output_predictions_dir=runs/predictions
+{% elif profile == 'probe' %}meds-model preprocess_data  external_meds_dir=$MEDS_ROOT output_data_dir=runs/data
+meds-model pretrain         input_data_dir=runs/data output_pretrained_model_dir=runs/models/pretrained
+meds-model preprocess_task  input_data_dir=runs/data external_task_file=$TASK
+meds-model infer            input_data_dir=runs/data input_pretrained_model_dir=runs/models/pretrained
+meds-model supervised_train input_data_dir=runs/data input_inference_subdir=inference/embeddings \
+                            output_supervised_model_dir=runs/models/supervised
+meds-model predict          input_data_dir=runs/data input_supervised_model_dir=runs/models/supervised \
+                            output_predictions_dir=runs/predictions
+{% else %}meds-model preprocess_data external_meds_dir=$MEDS_ROOT output_data_dir=runs/data
+meds-model preprocess_task input_data_dir=runs/data external_task_file=$TASK
+# ... then the commands listed by `meds-model commands`
 {% endif %}```
 
-The final `prediction` step writes `runs/preds/predictions.parquet` in the
-[meds-evaluation](https://github.com/kamilest/meds-evaluation) `PredictionSchema`
-(`subject_id, prediction_time, predicted_boolean_probability`). **This repo ends at producing predicted
-probabilities — evaluation is a separate, shared tool.**
+Any extra argument is a Hydra override, e.g.
+`meds-model supervised_train trainer.max_epochs=50 model.d_model=128`.
 
-Any extra argument is a Hydra override (e.g. `meds-model supervised_train trainer.max_epochs=50 model.d_model=128`).
+### Two rules worth knowing
+
+**Sources are alternatives, not layers.** `supervised_train` and `predict` each accept several optional
+input artifacts. Supplying more than one is an error rather than a precedence decision, and supplying one
+the model does not handle is an error rather than a silently ignored argument.
+
+**Predictions cover the whole index.** `predict` writes one row per task timepoint in the selected splits,
+or fails. A short predictions file is indistinguishable downstream from a complete one, so it is never
+written. Restrict the request with `splits=[held_out]` instead.
+
+`predict` emits `predictions.parquet` in the
+[meds-evaluation](https://github.com/kamilest/meds-evaluation) `PredictionSchema`
+(`subject_id, prediction_time, predicted_boolean_probability`). **This repository ends at predicted
+probabilities — it never reads ground-truth labels, and evaluation is a separate, shared tool.**
 
 ## Editing
 
 - **`src/{{ model_slug }}/model.py`** — your `LightningModule`. Edit freely.
-- **`src/{{ model_slug }}/steps.py`** — which steps you implement.
-- **`src/{{ model_slug }}/configs/model/`** — your model hyperparameters.
+- **`src/{{ model_slug }}/commands.py`** — which commands this model supports.
+- **`src/{{ model_slug }}/configs/`** — `model/` hyperparameters, `paths/` locations, `profile/` wiring.
 - **`src/meds_model_base/`** — the vendored contract (managed by `copier update`; don't edit).
 
 ## Testing

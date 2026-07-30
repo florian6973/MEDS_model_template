@@ -1,0 +1,35 @@
+# @package _global_
+# predict: produce standardized predictions for a task.
+# Exactly one of the three sources below must be supplied, unless this model ships packaged weights.
+# Ground truth is never read: only (subject_id, prediction_time) are taken from the task.
+defaults:
+  - paths: default
+  - datamodule: task
+  - model: default
+  - trainer: default
+  - optimizer: adamw
+  - _self_
+  - profile: default
+
+input_data_dir: ${data_dir}
+input_task_subdir: ${tasks.default}
+output_predictions_dir: ${predictions_dir}
+
+#: Mutually exclusive prediction sources.
+input_supervised_model_dir: null
+input_pretrained_model_dir: null
+input_inference_subdir: null
+
+#: Which splits to score; null means every split present in the task. Coverage of the selected splits is
+#: enforced — a model that cannot score every timepoint fails rather than writing a short file.
+splits: null
+
+max_seq_len: 256
+batch_size: 32
+num_workers: 0
+
+do_overwrite: false
+
+hydra:
+  run: {dir: "${log_dir}/predict"}
+  job: {chdir: false}

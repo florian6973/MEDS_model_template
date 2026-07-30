@@ -23,9 +23,10 @@ dependencies = [
   "polars>=1.30,<2",
   "pyarrow",
   "numpy",
-{% if profile in ['zero_shot_ar', 'every_query'] or implements_prediction and profile == 'custom' %}  # Zero-shot / query models parse ACES task definitions:
+  # Task materialization (`preprocess_task`) extracts ACES task definitions. Models that only ever
+  # receive pre-materialized labels can drop this and use the `aces` extra instead.
   "es-aces>=0.7.3",
-{% endif %}]
+]
 
 [project.optional-dependencies]
 aces = ["es-aces>=0.7.3"]
@@ -77,5 +78,7 @@ known-third-party = ["meds_model_base"]
 
 [tool.pytest.ini_options]
 addopts = ["--color=yes", "--doctest-modules", "--doctest-glob=*.md"]
+# ELLIPSIS lets docstring examples elide long error messages; NORMALIZE_WHITESPACE lets them wrap.
+doctest_optionflags = ["ELLIPSIS", "NORMALIZE_WHITESPACE"]
 testpaths = ["src", "tests"]
 markers = ["slow: designed-signal learnability test (deselect with '-m \"not slow\"')"]

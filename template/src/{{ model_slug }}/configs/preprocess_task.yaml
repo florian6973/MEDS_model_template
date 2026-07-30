@@ -1,0 +1,24 @@
+# @package _global_
+# preprocess_task: materialize or validate a task against already-preprocessed patient data.
+# Appends <input_data_dir>/<output_task_subdir>; never touches patients/.
+defaults:
+  - paths: default
+  - _self_
+  - profile: default
+
+input_data_dir: ${data_dir}
+
+#: Either an ACES task YAML or an already-materialized label parquet (or directory of {split}.parquet).
+external_task_file: ???
+output_task_subdir: ${tasks.default}
+
+#: Only needed for ACES extraction, and only when the raw MEDS dataset has moved since preprocess_data
+#: (its location is otherwise recovered from the patients manifest).
+external_meds_dir: null
+predicates_file: null
+
+do_overwrite: false
+
+hydra:
+  run: {dir: "${input_data_dir}/.logs"}
+  job: {chdir: false}

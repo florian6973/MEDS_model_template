@@ -3,9 +3,9 @@ from importlib.resources import files
 
 from meds_model_base.dispatch import make_cli
 
-from .steps import STEPS
+from .commands import COMMANDS
 
-cli = make_cli(STEPS, str(files("{{ model_slug }}").joinpath("configs")))
+cli = make_cli(COMMANDS, str(files("{{ model_slug }}").joinpath("configs")))
 
 if __name__ == "__main__":  # pragma: no cover
     cli()

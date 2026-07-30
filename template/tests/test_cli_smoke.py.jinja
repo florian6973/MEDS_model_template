@@ -1,22 +1,32 @@
-"""Tier 1 — CLI smoke: every implemented step's ``--help`` composes and exits 0.
+"""Tier 1 — CLI smoke: every supported command's ``--help`` composes and exits 0.
 
 Catches config-path / resolver-registration / structured-config regressions cheaply, without training.
+Also pins the two properties the dispatcher is responsible for: it lists exactly the supported commands,
+and it refuses an unsupported one instead of failing somewhere deeper.
 """
 import subprocess
 
 import pytest
 
-from {{ model_slug }}.steps import STEPS
+from meds_model_base.commands import CommandName
+
+from {{ model_slug }}.commands import COMMANDS
 
 
-def test_steps_lists_implemented():
-    result = subprocess.run(["meds-model", "steps"], capture_output=True, text=True)
+def test_commands_lists_supported():
+    result = subprocess.run(["meds-model", "commands"], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
-    listed = set(result.stdout.split())
-    assert listed == {s.value for s in STEPS}
+    assert set(result.stdout.split()) == {c.value for c in COMMANDS}
 
 
-@pytest.mark.parametrize("step", [s.value for s in STEPS])
-def test_step_help_exits_zero(step):
-    result = subprocess.run(["meds-model", step, "--help"], capture_output=True, text=True)
+@pytest.mark.parametrize("command", [c.value for c in COMMANDS])
+def test_command_help_exits_zero(command):
+    result = subprocess.run(["meds-model", command, "--help"], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize("command", sorted({c.value for c in CommandName} - {c.value for c in COMMANDS}))
+def test_unsupported_command_fails_clearly(command):
+    result = subprocess.run(["meds-model", command], capture_output=True, text=True)
+    assert result.returncode != 0
+    assert "does not support" in (result.stdout + result.stderr)

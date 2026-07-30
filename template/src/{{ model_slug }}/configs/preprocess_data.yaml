@@ -1,0 +1,24 @@
+# @package _global_
+# preprocess_data: external MEDS -> this model's patient representation.
+# Creates <output_data_dir>/patients, the immutable base of the shared workspace.
+defaults:
+  - paths: default
+  - _self_
+  - profile: default
+
+external_meds_dir: ???
+output_data_dir: ${data_dir}
+
+#: Optional MEDS-transforms pipeline YAML applied before tensorization, plus extra overrides for it.
+pipeline: null
+pipeline_overrides: []
+
+#: Required unless the input is already sharded by split (it usually is not).
+do_reshard: true
+
+#: Artifacts are immutable; set true to replace an existing patients/ directory.
+do_overwrite: false
+
+hydra:
+  run: {dir: "${output_data_dir}/.logs"}
+  job: {chdir: false}

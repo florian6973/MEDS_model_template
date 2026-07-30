@@ -16,20 +16,25 @@ jobs:
       - run: uv run ruff format --check .
       - run: uv run pytest tests/ -q
 
-  # Heavier check: render one profile, install it, and run its own smoke suite (real preprocess + train +
-  # predict on tiny meds-testing-helpers data). Proves a generated repo works end to end.
+  # Heavier check: render a profile, install it, and run its own smoke suite (real preprocess_data +
+  # training + predict on tiny meds-testing-helpers data). Proves a generated repo works end to end.
+  # `probe` is included because it is the only chain exercising infer -> supervised_train -> predict.
   rendered-smoke:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: [supervised_basic, probe]
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
-      - name: Render the supervised-basic profile
+      - name: Render the ${{ matrix.profile }} profile
         run: |
           uvx copier copy --vcs-ref=HEAD --defaults --trust \
             --data model_slug=demo_model --data model_name="Demo Model" \
-            --data profile=supervised_basic . /tmp/demo_model
+            --data profile=${{ matrix.profile }} . /tmp/demo_model
       - name: Install torch (CPU) + run the generated repo's smoke tests
         working-directory: /tmp/demo_model
         run: |

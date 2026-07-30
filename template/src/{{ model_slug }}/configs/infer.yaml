@@ -1,0 +1,32 @@
+# @package _global_
+# infer: materialize reusable per-timepoint outputs from a pretrained model.
+# What is produced (embeddings, trajectories, hazards, scores) is the model's choice, not an argument;
+# the kind is recorded in the artifact manifest so consumers can validate it.
+defaults:
+  - paths: default
+  - datamodule: task
+  - model: default
+  - trainer: default
+  - optimizer: adamw
+  - _self_
+  - profile: default
+
+input_data_dir: ${data_dir}
+input_pretrained_model_dir: ${models.pretrained}
+output_inference_subdir: ${inference.embeddings}
+
+#: Fixes the timepoints to infer at.
+input_task_subdir: ${tasks.default}
+
+#: Which splits to cover; null means every split present in the task.
+splits: null
+
+max_seq_len: 256
+batch_size: 32
+num_workers: 0
+
+do_overwrite: false
+
+hydra:
+  run: {dir: "${log_dir}/infer"}
+  job: {chdir: false}

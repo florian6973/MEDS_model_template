@@ -3,13 +3,15 @@
 A generated repo's ``src/<model_slug>/__main__.py`` is a two-liner::
 
     from meds_model_base.dispatch import make_cli
-    from .steps import STEPS
-    cli = make_cli(STEPS, config_dir=...)   # registered as the `meds-model` console script
+    from .commands import COMMANDS
+    cli = make_cli(COMMANDS, config_dir=...)   # registered as the `meds-model` console script
 
-:func:`make_cli` returns a ``cli()`` that parses ``meds-model <step> [hydra overrides...]``, handles the
-introspection sub-commands (``steps``, ``--help``), and hands the chosen step off to Hydra. Resolvers are
-registered **explicitly** (via :func:`register_resolvers`) at CLI start — never as an import side-effect,
-which was a fragile pattern in the reference model.
+:func:`make_cli` returns a ``cli()`` that parses ``meds-model <command> [hydra overrides...]``, handles the
+introspection sub-commands (``commands``, ``--help``), and hands the chosen command off to Hydra.
+
+Commands are always invoked through ``MEDSModelCommand.__call__``, never ``run`` directly, so argument
+arbitration always happens. Resolvers are registered **explicitly** at CLI start rather than as an import
+side-effect.
 """
 
 from __future__ import annotations
@@ -22,7 +24,7 @@ from omegaconf import OmegaConf
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from collections.abc import Mapping
 
-    from .steps.base import MEDSModelStep, StepName
+    from .commands.base import CommandName, MEDSModelCommand
 
 # ------------------------------------------------------------------------------------------------------
 # OmegaConf resolvers
@@ -49,6 +51,13 @@ def _gpus_available() -> bool:
     return _num_gpus() > 0
 
 
+def _prod(xs) -> float:
+    out = 1
+    for x in xs:
+        out *= x
+    return out
+
+
 #: Resolver name → callable. Registered with ``replace=True`` so repeated CLI invocations in one process
 #: (e.g. the pytest smoke tests) don't raise "already registered".
 RESOLVERS = {
@@ -61,13 +70,6 @@ RESOLVERS = {
     "oc_max": lambda *xs: max(xs),
     "int_prod": lambda *xs: int(_prod(xs)),
 }
-
-
-def _prod(xs) -> float:
-    out = 1
-    for x in xs:
-        out *= x
-    return out
 
 
 def register_resolvers() -> None:
@@ -90,29 +92,29 @@ def register_resolvers() -> None:
 # ------------------------------------------------------------------------------------------------------
 
 _USAGE = """\
-usage: meds-model <step> [hydra.overrides ...]
+usage: meds-model <command> [hydra.overrides ...]
 
-Steps implemented by this model:
+Commands supported by this model:
 {implemented}
 
-Other commands:
-  meds-model steps          list the steps this model implements
-  meds-model <step> --help  show the step's Hydra config and overridable options
+Other invocations:
+  meds-model commands          list the commands this model supports
+  meds-model <command> --help  show the command's Hydra config and overridable options
 """
 
 
-def _implemented_block(steps: Mapping[StepName, type[MEDSModelStep]]) -> str:
-    if not steps:
+def _implemented_block(commands: Mapping[CommandName, type[MEDSModelCommand]]) -> str:
+    if not commands:
         return "  (none)"
-    return "\n".join(f"  {name.value}" for name in steps)
+    return "\n".join(f"  {name.value}" for name in commands)
 
 
-def make_cli(steps: Mapping[StepName, type[MEDSModelStep]], config_dir: str):
-    """Build the ``meds-model`` entry-point callable for a model's ``STEPS`` registry.
+def make_cli(commands: Mapping[CommandName, type[MEDSModelCommand]], config_dir: str):
+    """Build the ``meds-model`` entry-point callable for a model's ``COMMANDS`` registry.
 
     Args:
-        steps: mapping of :class:`~meds_model_base.steps.base.StepName` → step class for the steps this
-            model implements.
+        commands: mapping of :class:`~meds_model_base.commands.base.CommandName` → command class, for the
+            commands this model supports.
         config_dir: absolute path to the model's packaged Hydra ``configs/`` directory.
 
     Returns:
@@ -120,7 +122,7 @@ def make_cli(steps: Mapping[StepName, type[MEDSModelStep]], config_dir: str):
     """
 
     def cli() -> None:
-        from .steps.base import StepName
+        from .commands.base import CommandName
 
         register_resolvers()
 
@@ -128,68 +130,69 @@ def make_cli(steps: Mapping[StepName, type[MEDSModelStep]], config_dir: str):
         first = argv[1] if len(argv) > 1 else None
 
         if first in (None, "-h", "--help", "help"):
-            print(_USAGE.format(implemented=_implemented_block(steps)))
+            print(_USAGE.format(implemented=_implemented_block(commands)))
             sys.exit(0)
 
-        if first == "steps":
-            for name in steps:
+        if first == "commands":
+            for name in commands:
                 print(name.value)
             sys.exit(0)
 
         try:
-            step_name = StepName(first)
+            command_name = CommandName(first)
         except ValueError:
-            valid = ", ".join(s.value for s in StepName)
-            sys.exit(f"error: unknown step {first!r}. Valid steps: {valid}.")
+            valid = ", ".join(c.value for c in CommandName)
+            sys.exit(f"error: unknown command {first!r}. Valid commands: {valid}.")
 
-        if step_name not in steps:
-            impl = ", ".join(s.value for s in steps) or "(none)"
+        if command_name not in commands:
+            impl = ", ".join(c.value for c in commands) or "(none)"
             sys.exit(
-                f"error: this model does not implement the {step_name.value!r} step. Implemented: {impl}."
+                f"error: this model does not support the {command_name.value!r} command. Supported: {impl}."
             )
 
-        # Hand the remaining argv (overrides / --help / --multirun) to Hydra. Pop the step token so
+        # Hand the remaining argv (overrides / --help / --multirun) to Hydra. Pop the command token so
         # Hydra sees only its own arguments.
-        step = steps[step_name]()
+        command = commands[command_name]()
         del argv[1]
-        _run_with_hydra(step, config_dir)
+        _run_with_hydra(command, config_dir)
 
     return cli
 
 
-def _run_with_hydra(step: MEDSModelStep, config_dir: str) -> None:
-    """Wrap ``step.run`` in ``hydra.main`` and invoke it (consuming ``sys.argv`` overrides).
+def _run_with_hydra(command: MEDSModelCommand, config_dir: str) -> None:
+    """Wrap the command in ``hydra.main`` and invoke it (consuming ``sys.argv`` overrides).
 
     Registers the meds-torch-data structured config just before composition so ``datamodule.config`` is a
-    typed node. This import (and the torch it pulls) is deferred to here so the torch-free introspection
-    paths (``meds-model steps`` / top-level ``--help``) stay cheap.
+    typed node. That import (and the torch it pulls) is deferred to here so the torch-free introspection
+    paths (``meds-model commands`` / top-level ``--help``) stay cheap.
+
+    The command is invoked via ``__call__``, not ``run``, so argument arbitration cannot be skipped.
     """
     import hydra
 
     from .lightning import register_structured_configs
 
     register_structured_configs()
-    hydra.main(version_base="1.3", config_path=config_dir, config_name=step.config_name)(step.run)()
+    hydra.main(version_base="1.3", config_path=config_dir, config_name=command.config_name)(command)()
 
 
-def run_step(
-    steps: Mapping[StepName, type[MEDSModelStep]],
-    step: StepName | str,
+def run_command(
+    commands: Mapping[CommandName, type[MEDSModelCommand]],
+    command: CommandName | str,
     config_dir: str,
     overrides: list[str] | None = None,
 ) -> None:
-    """Programmatically run one step (for tests / notebooks) without touching the real ``sys.argv``.
+    """Programmatically run one command (for tests / notebooks) without touching the real ``sys.argv``.
 
-    Builds ``sys.argv`` as ``["meds-model", step, *overrides]`` and delegates to :func:`make_cli`. Because
-    ``hydra.main`` calls ``sys.exit`` on completion, callers generally run this in a subprocess; it is
-    provided mainly for symmetry and documentation.
+    Because ``hydra.main`` calls ``sys.exit`` on completion, callers generally run this in a subprocess; it
+    is provided mainly for symmetry and documentation.
     """
-    from .steps.base import StepName
+    from .commands.base import CommandName
 
-    name = StepName(step) if not isinstance(step, StepName) else step
+    name = CommandName(command) if not isinstance(command, CommandName) else command
     saved = sys.argv
     try:
         sys.argv = ["meds-model", name.value, *(overrides or [])]
-        make_cli(steps, config_dir)()
+        make_cli(commands, config_dir)()
     finally:
         sys.argv = saved

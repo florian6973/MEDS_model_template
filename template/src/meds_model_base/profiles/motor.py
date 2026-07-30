@@ -2,14 +2,17 @@
 
 ``MotorModel`` is one module with two objectives, auto-selected by whether the batch carries labels:
 
-- **``unsupervised_train`` (no labels)** — a time-to-event pretraining objective: from each position's
-  contextual state, predict the gap to the next measurement under an exponential hazard (NLL). This
-  teaches the encoder the temporal structure of a subject's timeline (the essence of MOTOR).
+- **``pretrain`` (no labels)** — a time-to-event pretraining objective: from each position's contextual
+  state, predict the gap to the next measurement under an exponential hazard (NLL). This teaches the
+  encoder the temporal structure of a subject's timeline (the essence of MOTOR).
 - **``supervised_train`` (labels present)** — a binary classification head on the pooled representation,
-  **warm-started** from the pretrained encoder (via ``model_initialization_dir``; ``load_state_dict``
+  **warm-started** from the pretrained encoder (via ``input_pretrained_model_dir``; ``load_state_dict``
   ``strict=False`` transfers the shared embedder + encoder, leaves the fresh classification head).
 
-At ``prediction`` it applies the classification head (``SupervisedPredictionStep``). This is a compact,
+The warm start is checked: transferring *nothing* raises rather than quietly training from scratch, since
+a fine-tune that matched no parameters is a different experiment than the one that was requested.
+
+At ``predict`` it applies the classification head (``SupervisedPredictCommand``). This is a compact,
 native reimplementation of the MOTOR *approach* on the modern stack — no FEMR dependency.
 """
 
@@ -64,6 +67,10 @@ class MotorModel(BaseLightningModule):
 
     def _sequence(self, batch: MEDSTorchBatch) -> Tensor:
         return self.encoder(self.embedder(batch), padding_mask(batch))
+
+    def encode(self, batch: MEDSTorchBatch) -> Tensor:
+        """Pooled subject representation — also what ``infer`` materializes as embeddings."""
+        return self._pooled(batch)
 
     def _pooled(self, batch: MEDSTorchBatch) -> Tensor:
         return masked_mean(self._sequence(batch), padding_mask(batch))

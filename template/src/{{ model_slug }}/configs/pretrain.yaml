@@ -1,0 +1,31 @@
+# @package _global_
+# pretrain: train a foundation model from patient data. No task is involved: a model that needs targets
+# derives them internally.
+defaults:
+  - paths: default
+  - datamodule: patients
+  - model: default
+  - trainer: default
+  - callbacks: default
+  - logger: csv
+  - optimizer: adamw
+  - _self_
+  - profile: default
+
+input_data_dir: ${data_dir}
+output_pretrained_model_dir: ${models.pretrained}
+
+max_seq_len: 256
+batch_size: 32
+num_workers: 0
+seed: 0
+
+do_overwrite: false
+#: Resume from a previous interrupted run's work directory (not from a published artifact).
+do_resume: true
+work_dir: null
+clean_work_dir: true
+
+hydra:
+  run: {dir: "${log_dir}/pretrain"}
+  job: {chdir: false}

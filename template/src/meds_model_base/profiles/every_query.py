@@ -1,14 +1,17 @@
 """The EveryQuery profile: query-conditioned pretraining, then zero-shot prediction by querying.
 
 ``EveryQueryModel`` pretrains a multi-label *occurrence* head — from a subject's pooled representation,
-predict which codes occur in their timeline (``unsupervised_train``; a simplified proxy for EveryQuery's
-"does code X occur within horizon" objective). At ``prediction``, ``EveryQueryPredictionStep`` translates
-the ACES task definition into a code *query* and reads that code's predicted occurrence probability — i.e.
-it *parses* the ACES file into an EQ query rather than running ACES over data.
+predict which codes occur in their timeline (``pretrain``; a simplified proxy for EveryQuery's "does code X
+occur within horizon" objective). At ``predict``, :class:`EveryQueryPredictCommand` translates the ACES task
+definition into a code *query* and reads that code's predicted occurrence probability — it *parses* the
+ACES file into an EQ query rather than running ACES over data.
 
-The task→code translation is best-effort (first plain-predicate code); when no task is given or the code is
-unknown it falls back to the ``ZeroShotPredictionStep`` placeholder. Real EQ query translation is
-model-specific and can be as rich as needed.
+The task definition is recovered from the task artifact's manifest, so ``predict`` needs no extra argument
+and cannot be handed a definition that disagrees with the materialized labels.
+
+Translation is best-effort (the first plain-predicate code), but a failure to translate is an **error**, not
+a fallback: a zero-shot model that cannot resolve the task has nothing to say, and emitting a placeholder
+probability would produce a schema-valid predictions file of pure noise.
 """
 
 from __future__ import annotations
@@ -16,12 +19,14 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 from pathlib import Path
+from typing import ClassVar
 
 import torch
 import torch.nn.functional as F
 from meds_torchdata import MEDSTorchBatch
 from torch import Tensor, nn
 
+from ..commands.predict import ZeroShotPredictCommand
 from ..lightning.modules import (
     PAD_INDEX,
     BaseLightningModule,
@@ -31,7 +36,6 @@ from ..lightning.modules import (
     masked_mean,
     padding_mask,
 )
-from ..steps.predict import ZeroShotPredictionStep
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +68,13 @@ class EveryQueryModel(BaseLightningModule):
             raise ValueError(f"Unknown encoder {encoder!r}.")
         self.query_head = nn.Linear(d_model, vocab_size)  # per-code occurrence logits
 
+    #: `infer` materializes per-code occurrence probabilities, not embeddings.
+    inference_kind: ClassVar[str] = "scores"
+
+    def infer_step(self, batch: MEDSTorchBatch) -> dict[str, Tensor]:
+        """Materialize the full occurrence-probability vector so any code can be queried later."""
+        return {"query_probs": torch.sigmoid(self.occurrence_logits(batch)).detach().cpu()}
+
     def _pooled(self, batch: MEDSTorchBatch) -> Tensor:
         mask = padding_mask(batch)
         return masked_mean(self.encoder(self.embedder(batch), mask), mask)
@@ -92,35 +103,65 @@ def _multi_hot(codes: Tensor, vocab_size: int) -> Tensor:
     return target
 
 
-class EveryQueryPredictionStep(ZeroShotPredictionStep):
-    """Zero-shot prediction by translating the ACES ``task`` into a code-occurrence query."""
+class EveryQueryPredictCommand(ZeroShotPredictCommand):
+    """Zero-shot prediction by translating the task definition into a code-occurrence query."""
 
-    def resolve(self, cfg, keys, outputs) -> list[float]:
-        target_idx = self._target_vocab_index(cfg)
-        if target_idx is None or not outputs or "query_probs" not in outputs[0]:
-            return super().resolve(cfg, keys, outputs)
-        probs = torch.cat([o["query_probs"] for o in outputs], dim=0)
-        col = min(int(target_idx), probs.shape[1] - 1)
-        logger.info("EveryQuery: querying vocab index %d for the task.", col)
-        return probs[:, col].float().tolist()
+    def resolve(self, cfg, module, index):
+        import polars as pl
+
+        from ..commands._runtime import KEYS, run_predict_step
+        from ..commands.predict import PROBABILITY_COLUMN
+        from ..utils import resolve_subdir
+
+        task_dir = resolve_subdir(cfg.input_data_dir, cfg.input_task_subdir)
+        col = self._target_vocab_index(cfg, task_dir)
+
+        frames = []
+        for split in index["split"].unique(maintain_order=True).to_list():
+            keys, outputs = run_predict_step(cfg, module, split)
+            if not len(keys):
+                continue
+            if not outputs or "query_probs" not in outputs[0]:
+                raise ValueError(
+                    "The model's predict_step did not emit `query_probs`, which EveryQuery prediction "
+                    "queries. Check that model.py still returns it."
+                )
+            probs = torch.cat([o["query_probs"] for o in outputs], dim=0)
+            column = min(col, probs.shape[1] - 1)
+            frames.append(
+                keys.with_columns(
+                    pl.Series(PROBABILITY_COLUMN, probs[:, column].float().tolist(), dtype=pl.Float32),
+                    pl.lit(split).alias("split"),
+                )
+            )
+        if not frames:
+            raise ValueError("The datamodule produced no rows for any requested split.")
+        return pl.concat(frames, how="vertical_relaxed").select([*KEYS, "split", PROBABILITY_COLUMN])
 
     @staticmethod
-    def _target_vocab_index(cfg) -> int | None:
-        task = cfg.get("task")
-        if not task:
-            return None
-        try:
-            from ..tasks import load_task_config
+    def _target_vocab_index(cfg, task_dir) -> int:
+        """Translate the task definition into a vocabulary index, or fail loudly."""
+        from ..commands.predict import task_definition_path
+        from ..tasks import load_task_config
 
-            task_cfg = load_task_config(task)
-            code = _first_plain_code(task_cfg)
-            if code is None:
-                return None
-            vocab = _load_vocab(Path(cfg.datamodule.config.tensorized_cohort_dir))
-            return vocab.get(code)
-        except Exception as e:  # pragma: no cover - best-effort translation
-            logger.warning("Could not translate task to a query code: %s", e)
-            return None
+        definition = task_definition_path(task_dir)
+        if definition is None:
+            raise ValueError(
+                f"The task at {task_dir} was materialized from pre-extracted labels, so it carries no ACES "
+                "definition for EveryQuery to translate into a query. Re-run preprocess_task with the ACES "
+                "YAML as external_task_file."
+            )
+        code = _first_plain_code(load_task_config(definition))
+        if code is None:
+            raise ValueError(f"No plain-predicate code found in {definition} to query on.")
+        vocab = _load_vocab(Path(cfg.input_data_dir) / "patients")
+        if code not in vocab:
+            raise ValueError(
+                f"Task code {code!r} is not in this cohort's vocabulary, so the query cannot be answered. "
+                "EveryQuery can only score tasks whose target code was seen during preprocessing."
+            )
+        logger.info("EveryQuery: querying vocab index %d for code %s.", vocab[code], code)
+        return int(vocab[code])
 
 
 def _first_plain_code(task_cfg) -> str | None:

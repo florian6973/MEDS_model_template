@@ -1,0 +1,67 @@
+# @package _global_
+# The {{ profile }} profile.
+#
+# A profile is configuration, not a code path: every generated repository ships all six commands, and a
+# profile is just which of them are wired together and with which optional inputs. That makes the chain
+# below the whole of the profile's interface surface — there is nothing conditional in the command
+# implementations to keep in sync with it.
+#
+# Which commands this model *supports* is declared in `src/{{ model_slug }}/commands.py`, because the
+# dispatcher needs it before Hydra composes anything.
+#
+# Loaded last in every command's defaults list, so anything set here wins over the generic defaults. Put
+# model-specific overrides here; leave the artifact sources unset (they are per-run, and a wrong default
+# would silently point a run at the wrong model).
+
+profile:
+  name: {{ profile }}
+{% if profile == 'supervised_basic' %}  chain:
+    - preprocess_data
+    - preprocess_task
+    - supervised_train
+    - predict
+  notes: >-
+    A task model trained from scratch on the tokenized cohort. `predict` takes
+    input_supervised_model_dir.
+{% elif profile == 'zero_shot_ar' %}  chain:
+    - preprocess_data
+    - pretrain
+    - preprocess_task
+    - infer            # generates trajectories; optional if predict resolves in-process
+    - predict
+  notes: >-
+    Autoregressive pretraining, then zero-shot scoring. `predict` takes input_pretrained_model_dir and
+    resolves the task over the model's own generations — implement `resolve` in model.py or subclass
+    ZeroShotPredictCommand.
+{% elif profile == 'every_query' %}  chain:
+    - preprocess_data
+    - pretrain
+    - preprocess_task
+    - predict
+  notes: >-
+    Query-conditioned pretraining. `predict` takes input_pretrained_model_dir and translates the task
+    definition (recovered from the task manifest) into a native code query.
+{% elif profile == 'motor_finetune' %}  chain:
+    - preprocess_data
+    - pretrain
+    - preprocess_task
+    - supervised_train  # with input_pretrained_model_dir
+    - predict
+  notes: >-
+    Time-to-event pretraining, then supervised fine-tuning. Pass input_pretrained_model_dir to
+    supervised_train; a warm start that matches no parameters is an error, not a silent from-scratch run.
+{% elif profile == 'probe' %}  chain:
+    - preprocess_data
+    - pretrain
+    - preprocess_task
+    - infer             # materializes embeddings
+    - supervised_train  # with input_inference_subdir
+    - predict
+  notes: >-
+    Frozen-representation probe. The foundation model is never re-run downstream: `supervised_train`
+    trains a small head on the materialized embeddings, and `predict` recovers which embeddings to score
+    from the probe's own manifest.
+{% else %}  chain: []
+  notes: >-
+    Custom profile: wire the commands you need. See `meds-model commands` for what this model supports.
+{% endif %}

@@ -1,0 +1,25 @@
+# @package _global_
+# Shared locations, factored out so each command config refers to them by name rather than repeating
+# paths. Override any of these on the command line (`data_dir=...`), edit this file, or add another
+# `paths/<name>.yaml` and select it with `paths=<name>`.
+
+run_dir: runs
+
+#: The shared workspace: patients/ (immutable) plus task and inference subdirectories.
+data_dir: ${run_dir}/data
+
+#: Independent artifact roots.
+models:
+  pretrained: ${run_dir}/models/pretrained
+  supervised: ${run_dir}/models/supervised
+predictions_dir: ${run_dir}/predictions
+
+#: Components *inside* data_dir. Always relative to it — that is what distinguishes a subdir from a dir.
+tasks:
+  default: tasks/task
+inference:
+  embeddings: inference/embeddings
+
+#: Where loggers write. Training checkpoints do *not* go here — they live in a run's work directory
+#: until the model artifact is published atomically.
+log_dir: ${run_dir}/logs

@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## What this repo is
 
 A [Copier](https://copier.readthedocs.io) **template** (not an application) that generates MEDS model
-repositories exposing a mandated five-step CLI (`meds-model <step>`), contributable to
+repositories exposing a shared six-command interface (`meds-model <command>`), contributable to
 [MEDS-DEV](https://github.com/Medical-Event-Data-Standard/MEDS-DEV).
 
 Two distinct codebases live here, and they are built/tested differently:
@@ -18,6 +18,11 @@ Two distinct codebases live here, and they are built/tested differently:
 README.md carries a warning that the repo is AI-generated and unreviewed; treat existing code as
 unverified rather than as settled precedent.
 
+**[`design-interface.md`](design-interface.md) is the authoritative spec** for the command graph, artifact
+layout, manifests, and the arbitration/coverage rules. `docs/DESIGN.md` predates it and carries a banner
+saying so — it is useful for background (why Copier, the verified ecosystem APIs) but its five-step CLI
+vocabulary is obsolete.
+
 ## Commands
 
 Template-repo development (repo root):
@@ -26,8 +31,8 @@ Template-repo development (repo root):
 uv sync --group dev
 uv run ruff check .                 # only lints src/ + tests/ — `template/` is excluded
 uv run ruff format --check .
-uv run pytest tests/ -q             # renders all four profiles, ~seconds, no torch
-uv run pytest tests/test_render.py::test_render_profile -k zero_shot_ar   # a single profile
+uv run pytest tests/ -q             # renders all profiles, ~seconds, no torch
+uv run pytest tests/test_render.py::test_render_profile -k probe   # a single profile
 ```
 
 Render a repo by hand and exercise it (mirrors the `rendered-smoke` CI job):
@@ -46,85 +51,119 @@ uv run pytest -m "not slow" -q      # `-m slow` runs the designed-signal learnab
 `--trust` is needed because `copier.yml` declares post-copy `_tasks` (`git init`, best-effort `uvx ruff`).
 
 Inside a generated repo, pytest runs with `--doctest-modules` over `src`, so docstring examples in
-`meds_model_base` (e.g. `schemas.py`, `dispatch.py`) are executed as tests — keep them correct.
+`meds_model_base` are executed as tests. `doctest_optionflags = ["ELLIPSIS", "NORMALIZE_WHITESPACE"]` is
+set in the generated `pyproject.toml` — several doctests elide long error messages with `...` and will
+fail without it.
+
+If `copier`/`uv` are unavailable, `template/` can still be verified with a plain jinja2 render harness:
+walk the tree, render `*.jinja` and path segments, then `compileall` the result and `yaml.safe_load` every
+config. That catches broken Jinja, unused imports, and malformed YAML without installing torch.
 
 ## Architecture
 
 ### Ownership split inside a generated repo
 
-- `src/meds_model_base/` — the **vendored, template-managed contract**: step ABCs, the dispatcher, default
-  step implementations, schemas, profile `LightningModule`s, test helpers. Copied *verbatim* by Copier and
-  re-rendered by `copier update`, so contract fixes propagate to downstream repos.
-- `src/<model_slug>/` — the **user-owned surface**: `model.py`, `steps.py`, `__main__.py`, `configs/`.
-  Only `model.py` and `configs/model/**` are protected from `copier update` (`_skip_if_exists` in
-  `copier.yml`); `steps.py`, `__main__.py`, and the other config groups **are** overwritten on update.
-  Changing that boundary means editing `_skip_if_exists`.
+- `src/meds_model_base/` — the **vendored, template-managed contract**: command ABCs and arbitration, the
+  dispatcher, the manifest layer, default command implementations, schemas, profile `LightningModule`s,
+  test helpers. Copied *verbatim* by Copier and re-rendered by `copier update`.
+- `src/<model_slug>/` — the **user-owned surface**: `model.py`, `commands.py`, `configs/`. `model.py`,
+  `commands.py`, `configs/model/**`, `configs/paths/**` and `configs/profile/**` are protected from
+  `copier update` (`_skip_if_exists` in `copier.yml`); `__main__.py` and the other config groups are not.
 
-### The step contract
+### The command contract
 
-`template/src/meds_model_base/steps/base.py` defines `StepName` (the five steps, in pipeline order) and
-the `MEDSModelStep` ABC hierarchy. Each step class carries two `ClassVar`s — `name` and `config_name`
-(the Hydra root config, e.g. `_prediction`) — and one `run(cfg) -> Path`. Per-step ABCs declare the
-override hooks (`build_module` for training, `predict` for prediction).
+`template/src/meds_model_base/commands/base.py` defines `CommandName` (six commands) and the
+`MEDSModelCommand` ABC hierarchy. Each command class carries `name`, `config_name` (its Hydra root, named
+after the command), `sources` (alternative input parameters), `supported_sources` (the subset this
+implementation handles), and `require_source`.
 
-A model declares what it implements via `STEPS: dict[StepName, type[MEDSModelStep]]` in
-`src/<model_slug>/steps.py`. `make_cli(STEPS, config_dir)` (`dispatch.py`) parses
-`meds-model <step> [hydra overrides]`, handles `steps`/`--help`, and hands off to `hydra.main` using the
-step's `config_name` against the model package's `configs/` dir (resolved via `importlib.resources`).
+`MEDSModelCommand.__call__` runs `validate()` — which arbitrates the sources — and caches the result on
+`self.source` before dispatching to `run()`. **The dispatcher always invokes `__call__`, never `run`**, so
+arbitration cannot be bypassed. Preserve that when adding commands.
 
-Adding or renaming a step touches four places in lockstep: the ABC in `steps/base.py`, a
-`configs/_<step>.yaml` root, the `STEPS` entry in `steps.py.jinja`, and `PROFILE_STEPS` in
-`tests/test_render.py`.
+A model declares support via `COMMANDS: dict[CommandName, type[MEDSModelCommand]]` in
+`src/<model_slug>/commands.py`. This is the only thing that has to branch on the profile in Python,
+because the dispatcher needs it before Hydra composes anything.
+
+Adding or renaming a command touches: the ABC in `commands/base.py`, a `configs/<command>.yaml` root, the
+`entries` table in `commands.py.jinja`, and `PROFILE_COMMANDS` + `ALL_COMMANDS` in `tests/test_render.py`.
+
+### Manifests are read, not just written
+
+`meds_model_base/manifest.py` is load-bearing, not bookkeeping. `write_artifact()` is a context manager
+that stages into a temp sibling and renames into place, writing `manifest.yaml` last — so a visible
+artifact is always complete. `read_manifest(dir, require_type=..., require_kind=...)` is how commands
+reject a wrong-typed input *before* doing work.
+
+Three places consume manifests for real behavior, not just provenance:
+
+- `_runtime.load_trained_module` reads `module_class` from the model artifact, **not** `cfg.model._target_`
+  — a checkpoint is loadable only by the class that wrote it.
+- `preprocess_task` recovers the raw MEDS location from the `patients/` manifest for ACES extraction.
+- `ProbePredictCommand` recovers which embeddings to score from the probe's own manifest, and
+  `predict.task_definition_path()` recovers the ACES YAML from the task manifest for zero-shot models.
+
+That last pattern is why `predict` needs no extra task-definition or embeddings argument: adding one would
+invite exactly the mismatch the manifest exists to prevent.
 
 ### Import-weight discipline (load-bearing)
 
-`steps/base.py` and `dispatch.py` are deliberately torch-free so `meds-model steps` and `--help` stay
-cheap; `steps/__init__.py` uses a module-level `__getattr__` to lazily import the torch-heavy default
-step classes, and `dispatch._run_with_hydra` defers `register_structured_configs` (which imports
-meds-torch-data) until just before Hydra composes. The tier-1 CLI smoke test in a generated repo depends
-on this. Don't hoist those imports to module top level.
+`commands/base.py`, `manifest.py` and `dispatch.py` are torch-free so `meds-model commands` and `--help`
+stay cheap; `commands/__init__.py` uses a module-level `__getattr__` to lazily import the heavy default
+implementations, and `dispatch._run_with_hydra` defers `register_structured_configs` until just before
+Hydra composes. The tier-1 CLI smoke test depends on this. Don't hoist those imports.
 
 ### Schemas
 
-`meds_model_base/schemas.py` is the single source of truth for every column name — it re-exports the
-canonical `meds` / `meds_evaluation` classes and constants rather than hardcoding strings. It
-intentionally omits `from __future__ import annotations`: `flexible_schema` reads live `Required(...)`
-descriptors off class annotations, and PEP 563 stringization breaks schema construction. It adds two
-template-specific *open* schemas the standard lacks — `IndexSchema` and `TaskAgnosticOutputSchema` —
-because `meds.LabelSchema` is closed.
+`meds_model_base/schemas.py` is the single source of truth for column names — it re-exports canonical
+`meds` / `meds_evaluation` classes rather than hardcoding strings. It intentionally omits
+`from __future__ import annotations`: `flexible_schema` reads live `Required(...)` descriptors off class
+annotations, and PEP 563 stringization breaks schema construction.
 
-Contract invariant: the `prediction` step never reads ground-truth labels. `load_index()` drops
-`boolean_value` even when handed a MEDS-DEV `labels_dir`, and output is validated through
-`PredictionSchema.align()` before writing `predictions.parquet`.
+### Failure modes the contract deliberately catches
+
+Each of these otherwise produces output that looks correct, so don't "simplify" them away:
+
+- `predict` enforces **coverage** (`_check_coverage`) and records `n_expected`/`n_written` per split.
+- `predict` **never reads ground truth** — `_runtime.load_index` drops `boolean_value`.
+- `train.load_pretrained_weights` **raises when a warm start matches zero parameters**.
+- `arbitrate_sources` rejects two sources and rejects an unsupported one; there is no precedence order.
+- Zero-shot `resolve` is **abstract**. A placeholder returning a constant would yield a schema-valid
+  predictions file of pure noise that every downstream check would pass.
 
 ### Profiles and Jinja gating
 
-`copier.yml`'s `profile` question presets the `implements_*` booleans (only *asked* when
-`profile == custom`). Those booleans gate Jinja conditionals across `steps.py.jinja`, `model.py.jinja`,
-`pyproject.toml.jinja`, the config roots, `model.yaml.jinja`, and the rendered tests. The four profiles
-(`supervised_basic`, `zero_shot_ar`, `every_query`, `motor_finetune`) each map to a reference
-`LightningModule` in `meds_model_base/profiles/`, which `src/<model_slug>/model.py` subclasses.
+`copier.yml`'s `profile` question presets `implements_*` booleans (only *asked* for `custom`). Unlike the
+previous design, those gate only `commands.py.jinja`, `model.py.jinja`, `configs/profile/default.yaml.jinja`
+and `model.yaml.jinja` — every command module and config root ships unconditionally.
 
-`_templates_suffix: .jinja` means **only** `.jinja` files are Jinja-rendered; everything else under
-`template/` is copied byte-for-byte (path segments like `{{ model_slug }}` are still substituted). Adding
-Jinja syntax to a file without the `.jinja` suffix silently ships the literal braces.
+`commands.py.jinja` builds an `entries` list in Jinja and derives its import block from it, so a profile
+can never import a class it doesn't register (which would fail ruff's F401 in the generated repo).
+
+`_templates_suffix: .jinja` means **only** `.jinja` files are rendered; everything else under `template/`
+is copied byte-for-byte (path segments like `{{ model_slug }}` are still substituted). Adding Jinja to a
+file without the suffix silently ships literal braces.
 
 ### Test tiers in a generated repo
 
-1. `test_cli_smoke.py` — `meds-model <step> --help` exits 0 for each implemented step.
-2. `test_smoke_pipeline.py` — end-to-end over `meds_testing_helpers` fixtures via subprocess CLI calls;
-   the load-bearing assertion is `PredictionSchema.align()` on the output parquet.
-3. `test_property.py` (`@pytest.mark.slow`) — designed-signal learnability with a negative control, backed
-   by `meds_model_base/testing/{synthetic,property}.py`.
+1. `test_cli_smoke.py` — `--help` exits 0 per supported command; `commands` lists exactly `COMMANDS`; an
+   unsupported command fails clearly.
+2. `test_smoke_pipeline.py` — end-to-end over `meds_testing_helpers` fixtures via subprocess. Which source
+   each command receives is **derived from the registered class's `supported_sources`**, so a profile whose
+   wiring and implementation disagree fails rather than silently exercising a different chain.
+3. `test_property.py` (`@pytest.mark.slow`) — designed-signal learnability with a negative control.
 
-This repo's own `tests/test_render.py` is a fourth, cheaper tier: render each profile, assert the expected
-files exist, assert `STEPS` registers exactly the profile's steps, and `compileall` the rendered `src/`.
+`tests/test_render.py` here is a fourth, cheaper tier: render each profile, assert the registry matches,
+assert every config root exists and parses, and `compileall` the rendered `src/`.
 
-## docs/DESIGN.md is aspirational in places
+## Known gaps
 
-`docs/DESIGN.md` is the design rationale and is useful for *intent* (step semantics, the (d)-vs-(e)
-distinction, MEDS-DEV integration, verified ecosystem API facts). But its repository-layout section
-describes files that do not exist in the tree: `aces_labels.py`, `meds_model_base/configs/`,
-`pipelines/preprocess.yaml`, `lightning/{datamodule,writer}.py`, `testing/fixtures.py`, the
-`SearchPathPlugin`, and a `meds-model export-meds-dev` helper. In the current implementation all Hydra
-configs live under `src/{{ model_slug }}/configs/`. Check the tree before acting on that document.
+- **ACES extraction is unverified.** `tasks.extract_with_aces` calls the documented `es-aces` API but has
+  never been run against a live install; results are normalized through `normalize_label_columns` rather
+  than assuming column names. The pre-materialized-labels path has no ACES dependency and is what the
+  smoke tests exercise.
+- **Zero-shot prediction is not covered end-to-end** by the smoke tests: it needs a task *definition*, and
+  the `meds_testing_helpers` fixture supplies pre-materialized labels, so that leg is skipped explicitly.
+- **No MEDS-DEV mapping has been validated.** `model.yaml.jinja` folds `preprocess_data` into the train
+  commands and runs `preprocess_task` over the supplied `labels_dir`, but this has not been run against a
+  live MEDS-DEV checkout. See the open questions in `design-interface.md`.

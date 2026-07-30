@@ -15,7 +15,7 @@ time-to-event) on top.
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, ClassVar
 
 import lightning.pytorch as L
 import torch
@@ -150,7 +150,28 @@ class BaseLightningModule(L.LightningModule):
     ``training_step`` / ``validation_step`` (logging the loss and any metrics) and ``configure_optimizers``.
     ``optimizer`` / ``scheduler`` are *partials* (from ``_partial_: true`` Hydra configs) — an optimizer
     factory ``params -> Optimizer`` and a scheduler factory ``optimizer -> LRScheduler``.
+
+    Two hooks separate the two things a trained model is asked for downstream:
+
+    - ``predict_step`` — task probabilities, consumed by ``predict``.
+    - :meth:`infer_step` — reusable per-timepoint artifacts, consumed by ``infer``. The default emits the
+      pooled representation, which is what a probe needs; a generative model overrides it to emit
+      trajectories. :attr:`inference_kind` declares which, and is recorded in the artifact manifest so a
+      consumer can reject artifacts of the wrong kind instead of misinterpreting them.
     """
+
+    #: What :meth:`infer_step` produces; see ``meds_model_base.manifest.InferenceKind``.
+    inference_kind: ClassVar[str] = "embeddings"
+
+    def infer_step(self, batch: MEDSTorchBatch) -> dict[str, Tensor]:
+        """Per-timepoint reusable outputs. Defaults to the pooled representation from ``encode``."""
+        encode = getattr(self, "encode", None)
+        if encode is None:
+            raise NotImplementedError(
+                f"{type(self).__name__} defines neither `encode` nor `infer_step`, so `infer` does not know "
+                "what to materialize. Implement one of them in your model."
+            )
+        return {"embedding": encode(batch).detach().cpu()}
 
     def __init__(
         self,

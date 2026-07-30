@@ -5,14 +5,15 @@ the canonical ``meds`` / ``meds_evaluation`` schema classes and path constants (
 hardcodes a column name), and defines the two schemas the mandated CLI needs that the standard does not
 provide:
 
-- :class:`IndexSchema` — the "index dataframe" consumed by ``task_agnostic_inference`` and (optionally)
-  ``prediction``: the two label *keys* ``(subject_id, prediction_time)`` with **no** value column and
-  arbitrary extra columns allowed. (``meds.LabelSchema`` is *closed*, so it cannot carry the passthrough
-  columns a caller may want on an index.)
-- :class:`TaskAgnosticOutputSchema` — the *open* output of ``task_agnostic_inference``: the two keys plus
-  whatever model columns the step emits (e.g. an ``embedding`` list column, or zero-shot scores). It is
-  deliberately **not** ``LabelSchema`` (which is closed and would reject those columns) and **not**
-  ``PredictionSchema`` (a task-agnostic output has no ground-truth ``boolean_value`` to score against).
+- :class:`IndexSchema` — an "index dataframe": the two label *keys* ``(subject_id, prediction_time)``
+  with **no** value column and arbitrary extra columns allowed. This is what ``infer`` and ``predict``
+  consume, since neither ever needs a label. (``meds.LabelSchema`` is *closed*, so it cannot carry the
+  passthrough columns a caller may want on an index.)
+- :class:`TaskAgnosticOutputSchema` — the *open* output of ``infer``: the two keys plus whatever model
+  columns were materialized (an ``embedding`` list column, generated trajectories, native scores). It is
+  deliberately **not** ``LabelSchema`` (closed, would reject those columns) and **not**
+  ``PredictionSchema`` (an inference artifact has no ground truth to score against). What *kind* of
+  artifact it holds is recorded in the artifact manifest, not in the schema.
 
 The prediction output contract is :class:`PredictionSchema` from ``meds_evaluation`` — validate/coerce a
 predictions table with :func:`validate_predictions`.
@@ -83,9 +84,9 @@ SPLITS: tuple[str, str, str] = (train_split, tuning_split, held_out_split)
 class IndexSchema(PyArrowSchema):
     """An "index dataframe": the two MEDS label keys, with extra passthrough columns allowed.
 
-    This is what ``task_agnostic_inference`` (and, before ACES extraction, ``prediction``) consumes to say
-    *at which patient timepoints* to make inference. The ``prediction_time`` is an inclusive as-of cutoff:
-    a model may use each subject's data up to and including that time.
+    This is what ``infer`` and ``predict`` consume to say *at which patient timepoints* to run. The
+    ``prediction_time`` is an inclusive as-of cutoff: a model may use each subject's data up to and
+    including that time.
 
     Unlike :class:`meds.LabelSchema`, this schema is **open** — a caller may attach arbitrary extra
     columns (e.g. a cohort id) and they will be preserved.
@@ -111,12 +112,12 @@ class IndexSchema(PyArrowSchema):
 
 
 class TaskAgnosticOutputSchema(PyArrowSchema):
-    """The output schema of ``task_agnostic_inference``: the two keys + arbitrary model columns.
+    """The output schema of ``infer``: the two keys + arbitrary model columns.
 
     An **open** schema keyed on ``(subject_id, prediction_time)``. A model attaches whatever it produces
     at each timepoint — e.g. an ``embedding: list<float32>`` column, generated-trajectory tokens, or
-    zero-shot scores. It is intentionally not scorable by ``meds-evaluation`` (there is no ground-truth
-    ``boolean_value``); scoring is the job of the ``prediction`` step.
+    native scores. It is intentionally not scorable by ``meds-evaluation`` (there is no ground-truth
+    ``boolean_value``); producing scorable output is the job of ``predict``.
 
     Examples:
         >>> from datetime import datetime
@@ -138,7 +139,7 @@ class TaskAgnosticOutputSchema(PyArrowSchema):
 def validate_predictions(table: pa.Table) -> pa.Table:
     """Validate + coerce a predictions table to :class:`PredictionSchema`.
 
-    This is the load-bearing output check for the ``prediction`` step: it guarantees the emitted parquet
+    This is the load-bearing output check for ``predict``: it guarantees the emitted parquet
     is exactly what ``meds-evaluation`` expects (correct key columns, at least one non-all-null predicted
     column, ``float32`` probabilities, canonical column order). Raises
     ``flexible_schema.SchemaValidationError`` / ``TableValidationError`` on violation.
