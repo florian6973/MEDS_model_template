@@ -213,6 +213,9 @@ def test_meds_dev_runs_this_model_end_to_end(meds_dev, meds_root, labels_dir, tm
 
     manifest = yaml.safe_load((preds_dir / "manifest.yaml").read_text())
     coverage = manifest["coverage"]["held_out"]
+    # `> 0` first: the three-way equality below is satisfied by an empty predictions file against an empty
+    # index, so on its own it would pass a run that predicted nothing at all.
+    assert len(preds) > 0, "the run produced an empty predictions file"
     assert coverage["n_written"] == coverage["n_expected"] == len(preds)
 
     if CommandName.pretrain in COMMANDS:
