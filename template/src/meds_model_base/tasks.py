@@ -175,10 +175,19 @@ def split_labels(labels: pl.DataFrame, splits: pl.DataFrame) -> dict[str, pl.Dat
 
 
 def read_materialized_labels(task_file: Path | str) -> pl.DataFrame | dict[str, pl.DataFrame]:
-    """Read pre-materialized labels: a single parquet, or a directory of ``{split}.parquet`` files.
+    """Read pre-materialized labels from a parquet file or a directory of them.
 
-    Returns a dict keyed by split when the input is already split by file (in which case no split table is
-    needed), else a single frame to be partitioned by :func:`split_labels`.
+    A directory may be organized either way, and both occur in the wild:
+
+    - **already split** — ``{train,tuning,held_out}.parquet``, which is what ``preprocess_task`` itself
+      writes, so a materialized task can be fed straight back in. Returned keyed by split; no subject-split
+      table is needed.
+    - **arbitrary shards** — any other ``*.parquet`` layout, which is what MEDS-DEV and the
+      ``meds_testing_helpers`` fixtures produce (``labels_A.parquet``, ``labels_B.parquet``, …). Returned
+      as one frame, to be partitioned by :func:`split_labels`.
+
+    Shard names carry no meaning, so they are concatenated rather than interpreted — guessing a split from
+    a filename would silently mis-assign subjects.
     """
     p = Path(task_file)
     if p.is_dir():
@@ -187,14 +196,20 @@ def read_materialized_labels(task_file: Path | str) -> pl.DataFrame | dict[str, 
             for split in SPLITS
             if (p / f"{split}.parquet").is_file()
         }
-        if not by_split:
-            raise TaskMaterializationError(
-                f"{p} is a directory but contains no {{{','.join(SPLITS)}}}.parquet files."
-            )
-        return {
-            split: normalize_label_columns(df, source=f"{p / f'{split}.parquet'}")
-            for split, df in by_split.items()
-        }
+        if by_split:
+            return {
+                split: normalize_label_columns(df, source=f"{p / f'{split}.parquet'}")
+                for split, df in by_split.items()
+            }
+
+        shards = sorted(fp for fp in p.rglob("*.parquet"))
+        if not shards:
+            raise TaskMaterializationError(f"{p} is a directory but contains no parquet files.")
+        logger.info("Reading %d label shard(s) from %s.", len(shards), p)
+        return pl.concat(
+            [normalize_label_columns(pl.read_parquet(fp), source=str(fp)) for fp in shards],
+            how="vertical_relaxed",
+        ).unique(maintain_order=True)
     if not p.is_file():
         raise TaskMaterializationError(f"external_task_file {p} does not exist.")
     return normalize_label_columns(pl.read_parquet(p), source=str(p))

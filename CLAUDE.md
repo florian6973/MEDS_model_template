@@ -55,9 +55,28 @@ Inside a generated repo, pytest runs with `--doctest-modules` over `src`, so doc
 set in the generated `pyproject.toml` — several doctests elide long error messages with `...` and will
 fail without it.
 
-If `copier`/`uv` are unavailable, `template/` can still be verified with a plain jinja2 render harness:
+**Run the rendered suite for real when you change the payload.** The fast `tests/` job never installs
+torch, so it can only check structure; several bugs are only reachable by actually running a generated
+repo (a relative import in a test module, a task layout the reader does not handle). It takes ~1 minute
+per profile with a warm uv cache:
+
+```bash
+uv run python -c "
+from copier import run_copy
+run_copy('.', '/tmp/demo', data={'model_slug':'demo_model','model_name':'Demo','profile':'probe'},
+         defaults=True, unsafe=True, quiet=True)"
+cd /tmp/demo && uv venv \
+  && uv pip install torch --index-url https://download.pytorch.org/whl/cpu \
+  && uv pip install -e . --group dev \
+  && uv run pytest -m "not slow" -q -rs
+```
+
+Expect ~29 passed and 1 skipped: the skip is `skip_if_stub`, and it is the correct result — everything
+that does not need a model runs, including real MTD tensorization and task materialization.
+
+If `copier`/`uv` are unavailable, `template/` can still be checked with a plain jinja2 render harness:
 walk the tree, render `*.jinja` and path segments, then `compileall` the result and `yaml.safe_load` every
-config. That catches broken Jinja, unused imports, and malformed YAML without installing torch.
+config. That is strictly weaker — it is what missed both bugs above.
 
 ## Architecture
 

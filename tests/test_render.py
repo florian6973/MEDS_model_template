@@ -303,8 +303,9 @@ def test_rendered_tests_are_importable(tmp_path, profile):
     time, which is what makes it nasty: it fires before ``-m "not slow"`` can deselect anything, so one bad
     import in a slow-marked module takes down the entire run.
 
-    Byte-compiling does not catch it — the syntax is valid — and this repo cannot run the rendered suite
-    (it needs torch), so the check has to be structural.
+    Byte-compiling does not catch it — the syntax is valid — and this job deliberately installs no torch,
+    so it cannot collect the rendered suite for real. The check therefore has to be structural. The
+    `rendered-smoke` CI job does install and run it, but a whole install later.
     """
     dst = tmp_path / f"imports_{profile}"
     _render(dst, profile)
