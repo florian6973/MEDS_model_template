@@ -227,10 +227,12 @@ chain — so a DAG whose wiring and implementation disagree fails instead of sil
 environment: it clones MEDS-DEV, installs it editable into its own venv, registers the model with
 `meds-model-add-to-meds-dev`, and runs `meds-dev-model mode=full dataset_type=full` — one invocation that
 covers every profile, because MEDS-DEV itself walks whatever stages the model declares and rolls
-`model_initialization_dir` forward. It is marked `slow` *and* `meds_dev`, and skips unless `MEDS_DEV_DIR`
-(cloned, never mutated) or `MEDS_DEV_CLONE=1` is set, so no ordinary test run touches the network:
+`model_initialization_dir` forward. Naming the marker is the whole opt-in — it clones MEDS-DEV itself, and
+a bare `pytest` skips it rather than cloning unannounced. `MEDS_DEV_DIR` is an optional override that
+reuses a local checkout (cloned to a temp dir, never mutated) for offline runs:
 
 ```bash
+UV_TORCH_BACKEND=cpu uv run pytest -m meds_dev -rs                        # clones MEDS-DEV
 MEDS_DEV_DIR=~/Git/MEDS-DEV UV_TORCH_BACKEND=cpu uv run pytest -m meds_dev -rs
 ```
 

@@ -24,12 +24,15 @@ therefore covers whichever profile this repository was generated with, without b
 **Skips while `model.py` is the generated stub**, like the rest of the conformance suite — this is the
 contract your model has to satisfy, and it starts running the moment you remove the `is_stub` marker.
 
-Opt-in and slow. It installs MEDS-DEV, then lets MEDS-DEV install *this repository* into a fresh venv:
+Selecting the marker is the opt-in; nothing else needs setting. MEDS-DEV is cloned for you:
 
-    MEDS_DEV_DIR=~/MEDS-DEV uv run pytest -m meds_dev   # a local checkout (copied, never mutated)
-    MEDS_DEV_CLONE=1 uv run pytest -m meds_dev          # clone MEDS-DEV from GitHub
+    uv run pytest -m meds_dev                          # clones MEDS-DEV from GitHub
+    MEDS_DEV_DIR=~/MEDS-DEV uv run pytest -m meds_dev  # reuse a local checkout instead (offline, faster)
 
-Set `UV_TORCH_BACKEND=cpu` unless you want CUDA wheels pulled into that isolated venv.
+A bare `pytest` skips this rather than silently cloning a repository and building two virtualenvs, so it
+runs only when you ask for it by marker (or point `MEDS_DEV_DIR` at a checkout).
+
+Set `UV_TORCH_BACKEND=cpu` unless you want CUDA wheels pulled into the isolated venv.
 """
 import os
 import shutil
@@ -82,8 +85,18 @@ def _run(cmd: list, *, timeout: int, env: dict | None = None) -> subprocess.Comp
     return result
 
 
+def _selected_by_marker(config) -> bool:
+    """Whether the run asked for this test by name, e.g. ``pytest -m meds_dev``.
+
+    A bare `pytest` collects everything, and cloning a repository plus building two virtualenvs is not
+    something a default test run should do unannounced. Naming the marker is the opt-in — there is no
+    second switch to remember.
+    """
+    return "meds_dev" in (config.getoption("markexpr", default="") or "")
+
+
 @pytest.fixture(scope="session")
-def meds_dev(tmp_path_factory) -> Path:
+def meds_dev(request, tmp_path_factory) -> Path:
     """A private MEDS-DEV clone with an editable install in ``<checkout>/.venv``.
 
     Always a clone, never the directory you point at: registering a model *writes into*
@@ -100,6 +113,13 @@ def meds_dev(tmp_path_factory) -> Path:
     """
     skip_if_stub(Model)
 
+    source = os.environ.get("MEDS_DEV_DIR")
+    if not source and not _selected_by_marker(request.config):
+        pytest.skip(
+            "run `pytest -m meds_dev` to opt in (it clones MEDS-DEV and builds two virtualenvs), or set "
+            "MEDS_DEV_DIR=/path/to/MEDS-DEV to reuse a local checkout"
+        )
+
     uv = shutil.which("uv")
     if uv is None:
         pytest.skip("uv is required: MEDS-DEV builds its per-model environment with it")
@@ -107,22 +127,15 @@ def meds_dev(tmp_path_factory) -> Path:
     if git is None:
         pytest.skip("git is required: MEDS-DEV is installed from a clone, and versions itself from git")
 
-    source = os.environ.get("MEDS_DEV_DIR")
     checkout = tmp_path_factory.mktemp("meds_dev") / "MEDS-DEV"
-
     if source:
         if not (Path(source) / ".git").is_dir():
             pytest.skip(f"MEDS_DEV_DIR={source} is not a git checkout, so MEDS-DEV cannot be installed")
         # Committed state only — uncommitted MEDS-DEV edits are deliberately not under test here.
         _run([git, "clone", source, checkout], timeout=INSTALL_TIMEOUT)
-    elif os.environ.get("MEDS_DEV_CLONE"):
-        # Treeless rather than shallow: it is nearly as fast but keeps the tags setuptools-scm reads.
-        _run([git, "clone", "--filter=blob:none", MEDS_DEV_URL, checkout], timeout=INSTALL_TIMEOUT)
     else:
-        pytest.skip(
-            "set MEDS_DEV_DIR=/path/to/MEDS-DEV (it is cloned, never mutated) or MEDS_DEV_CLONE=1 to "
-            "clone it from GitHub, then rerun with -m meds_dev"
-        )
+        # Treeless rather than shallow: nearly as fast, but keeps the tags setuptools-scm reads.
+        _run([git, "clone", "--filter=blob:none", MEDS_DEV_URL, checkout], timeout=INSTALL_TIMEOUT)
 
     _run([uv, "venv", checkout / ".venv"], timeout=INSTALL_TIMEOUT)
     _run(

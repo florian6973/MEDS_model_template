@@ -84,5 +84,5 @@ doctest_optionflags = ["ELLIPSIS", "NORMALIZE_WHITESPACE"]
 testpaths = ["src", "tests"]
 markers = [
   "slow: designed-signal learnability test (deselect with '-m \"not slow\"')",
-  "meds_dev: end-to-end through MEDS-DEV; also marked slow, and skips unless MEDS_DEV_DIR or MEDS_DEV_CLONE is set",
+  "meds_dev: end-to-end through MEDS-DEV (run with '-m meds_dev'; clones MEDS-DEV, so it skips otherwise)",
 ]

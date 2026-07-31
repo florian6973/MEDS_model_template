@@ -37,7 +37,6 @@ jobs:
       - run: uv sync --all-extras --dev
       - run: uv run pytest -m meds_dev -rs
         env:
-          MEDS_DEV_CLONE: "1"
           # MEDS-DEV installs this model with a plain `uv pip install -r`, which would otherwise resolve
           # the CUDA build of torch into a runner that has no GPU.
           UV_TORCH_BACKEND: cpu
