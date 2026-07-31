@@ -90,6 +90,9 @@ def build_signal_dataset(
     sequence can reach AUROC ≈ 1.0). ``shuffle_labels=True`` breaks the signal↔label link (negative
     control: nothing to learn, AUROC ≈ 0.5).
 
+    **Only the signal code is informative.** Sequence length and the signal's position within the sequence
+    are both label-independent by construction; see the comment in the loop for why that matters.
+
     Returns ``root`` (a MEDS dataset with a ``signal_task`` task-labels directory).
     """
     rng = random.Random(seed)
@@ -105,10 +108,19 @@ def build_signal_dataset(
         for _ in range(n):
             has_signal = rng.random() < signal_rate
             t = _BASE_TIME + timedelta(days=int(rng.random() * 100))
-            events: list[str] = []
+            # The signal is *inserted at a random position* and a negative subject gets a filler event, so
+            # that neither the signal's position nor the sequence length carries any information about the
+            # label. Prepending the signal instead (and leaving negatives one event shorter) leaks it twice
+            # over: the code would always sit at position 0, a positive subject would always have exactly
+            # one more event than a negative one — a length-only predictor measured AUROC 0.59 — and since
+            # prediction_time is derived from the event count, it would differ by class too. A model could
+            # then score well here without ever reading SIGNAL_CODE, which is the one thing this dataset
+            # exists to check.
+            events = [rng.choice(_BACKGROUND) for _ in range(rng.randint(4, 9))]
             if has_signal:
-                events.append(SIGNAL_CODE)
-            events += [rng.choice(_BACKGROUND) for _ in range(rng.randint(4, 9))]
+                events.insert(rng.randrange(len(events) + 1), SIGNAL_CODE)
+            else:
+                events.append(rng.choice(_BACKGROUND))
             for i, code in enumerate(events):
                 rows.append(
                     {

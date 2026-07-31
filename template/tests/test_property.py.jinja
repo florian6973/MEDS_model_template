@@ -41,8 +41,10 @@ def _predictions_for(chain, tmp_path, name: str, *, shuffle_labels: bool, seed: 
 def test_learns_designed_signal(chain, tmp_path):
     skip_if_stub(Model)
     preds, held = _predictions_for(chain, tmp_path, "signal", shuffle_labels=False, seed=0)
-    auroc = assert_learns_signal(preds, held, min_auroc=0.75)
-    assert auroc > 0.75
+    # The signal is perfectly separable, so a working model reaches ≈1.0 — a bar much below that would
+    # pass a model that learned the signal only partially.
+    auroc = assert_learns_signal(preds, held, min_auroc=0.9)
+    assert auroc > 0.9
 
 
 def test_negative_control_does_not_learn(chain, tmp_path):
