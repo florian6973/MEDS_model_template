@@ -12,9 +12,12 @@ from __future__ import annotations
 
 import ast
 import compileall
+import importlib.util
+import os
 import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -349,6 +352,70 @@ def test_rendered_configs_parse(tmp_path, profile):
             yaml.safe_load(fp.read_text())
         except yaml.YAMLError as e:  # pragma: no cover - failure path
             pytest.fail(f"{fp.relative_to(dst)} is not valid YAML: {e}")
+
+
+@pytest.mark.render
+def test_meds_dev_helper_writes_where_the_loader_looks(tmp_path):
+    """``meds-model-add-to-meds-dev`` must place files where MEDS-DEV's discovery actually finds them.
+
+    MEDS-DEV registers models by walking ``files("MEDS_DEV.models").rglob("*/model.yaml")`` and keying each
+    on ``path.relative_to(models_root).parent``. That expression is reproduced here rather than described,
+    so a layout change on either side fails the test instead of producing a model MEDS-DEV silently never
+    lists. The requirements rewrite is checked too: it is the only file that is *not* a copy, and getting
+    it wrong fails inside MEDS-DEV's isolated venv with a bare ``meds-model: command not found``.
+    """
+    if importlib.util.find_spec("MEDS_DEV") is not None:  # pragma: no cover - depends on the environment
+        pytest.skip("MEDS_DEV is importable here, so the helper's registration check governs the outcome")
+
+    dst = tmp_path / "meds_dev_repo"
+    _render(dst, "supervised")
+
+    models_root = tmp_path / "MEDS-DEV" / "src/MEDS_DEV/models"
+    models_root.mkdir(parents=True)
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "meds_model_base.meds_dev",
+            "--meds-dev",
+            str(tmp_path / "MEDS-DEV"),
+            "--repo",
+            str(dst),
+        ],
+        capture_output=True,
+        text=True,
+        env={**os.environ, "PYTHONPATH": str(dst / "src")},
+    )
+    assert result.returncode == 0, f"helper failed:\n{result.stdout}\n{result.stderr}"
+
+    found = list(models_root.rglob("*/model.yaml"))
+    assert len(found) == 1, f"MEDS-DEV's discovery glob found {len(found)} models, expected 1"
+    assert found[0].relative_to(models_root).parent.as_posix() == "m_supervised"
+
+    model_dir = found[0].parent
+    assert yaml.safe_load(found[0].read_text()) == yaml.safe_load((dst / "model.yaml").read_text())
+    assert (model_dir / "README.md").is_file(), "MEDS-DEV's contribution guide requires a README.md"
+
+    requirements = (model_dir / "requirements.txt").read_text()
+    assert f"-e {dst.resolve()}" in requirements, "a local checkout must be referenced by absolute path"
+    assert "-e .\n" not in requirements, "a relative editable install would install MEDS-DEV instead"
+
+
+@pytest.mark.render
+def test_meds_dev_helper_is_not_a_command(tmp_path):
+    """The helper is packaging tooling: an entry point, never a sixth ``CommandName``."""
+    dst = tmp_path / "meds_dev_entry"
+    slug = _render(dst, "supervised")
+
+    pyproject = (dst / "pyproject.toml").read_text()
+    assert '"meds-model-add-to-meds-dev" = "meds_model_base.meds_dev:main"' in pyproject
+
+    base = (REPO / "template/src/meds_model_base/commands/base.py").read_text()
+    assert "meds_dev" not in base, "the MEDS-DEV helper must not leak into the command contract"
+    body = base.split("class CommandName(StrEnum):", 1)[1].split("\nclass ", 1)[0]
+    assert set(re.findall(r'^    (\w+) = "\1"$', body, re.M)) == ALL_COMMANDS
+    assert "meds_dev" not in (dst / f"src/{slug}/commands.py").read_text()
 
 
 @pytest.mark.render

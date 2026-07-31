@@ -106,6 +106,28 @@ not scaffolding to delete — they are the contract your model has to satisfy, a
 moment you remove the `is_stub` marker. A fresh repository is therefore green but honest: the CLI, config
 composition and dispatcher are genuinely tested; the model is not yet there to test.
 
+## Contributing to MEDS-DEV
+
+`model.yaml` in this repository is the MEDS-DEV specification for this model's DAG. MEDS-DEV does not read
+it from here — it discovers models with `importlib.resources.files("MEDS_DEV.models").rglob("*/model.yaml")`,
+so a model is registered only by living inside the *installed* `MEDS_DEV` package. Fork MEDS-DEV, clone it,
+install it editable (`pip install -e '.[dev,tests]'` — the PyPI distribution cannot be contributed to), then:
+
+```bash
+meds-model-add-to-meds-dev --meds-dev ~/MEDS-DEV --dry-run   # print the plan
+meds-model-add-to-meds-dev --meds-dev ~/MEDS-DEV             # write it
+```
+
+This copies `model.yaml` verbatim, writes a `README.md` stub (MEDS-DEV requires one), and **rewrites**
+`requirements.txt` — the one part that is not a copy. MEDS-DEV builds an isolated venv and runs
+`uv pip install -r <file>` from its own working directory, so a local checkout must be referenced by
+absolute path; the default writes `-e {{ '{' }}this repo{{ '}' }}`. Once the model is installable by URL,
+edit this repository's `requirements.txt` (replace `YOUR_ORG`, or pin a release) and pass `--published` to
+use it as-is.
+
+The helper refuses to write if it finds `MEDS_DEV` importable from somewhere other than the checkout you
+named — that is the non-editable install case, where the files would land somewhere nothing imports.
+
 ## Updating the template
 
 ```bash

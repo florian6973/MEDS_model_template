@@ -85,6 +85,9 @@ config. That is strictly weaker — it is what missed both bugs above.
 - `src/meds_model_base/` — the **vendored, template-managed contract**: command ABCs and arbitration, the
   dispatcher, the manifest layer, default command implementations, schemas, artifact plumbing, and a small
   MEDS-batch adapter layer. Copied *verbatim* and re-rendered by `copier update`. **No models.**
+  It also carries two pieces of template-managed *tooling* that are deliberately not part of the command
+  contract: `testing/` (the conformance harness) and `meds_dev.py` (`meds-model-add-to-meds-dev`, which
+  installs `model.yaml` into a MEDS-DEV checkout). Neither may become a sixth `CommandName`.
 - `src/<model_slug>/` — the **user-owned surface**: `model.py` (a stub), `predict.py` (a stub, for the
   `zero_shot_direct` and `packaged` DAGs), `commands.py`, `configs/`. All of those plus
   `configs/model/**`, `configs/paths/**` and `configs/profile/**` are protected from `copier update`
@@ -224,6 +227,9 @@ chain — so a DAG whose wiring and implementation disagree fails instead of sil
 
 - **No end-to-end MEDS-DEV run.** `model.yaml.jinja` is written against MEDS-DEV's actual placeholder
   contract (checked against its source and two real models), but has never been executed by MEDS-DEV.
+  `test_meds_dev_helper_writes_where_the_loader_looks` narrows this a little by replaying MEDS-DEV's own
+  discovery glob (`rglob("*/model.yaml")` keyed on the parent directory) against what the helper writes,
+  but it stubs the checkout — MEDS-DEV itself is never imported.
 - **Nothing trains.** A generated repo ships no model, so no chain has ever run training or prediction —
   only preprocessing, dispatch and config composition. Closing that needs a reference implementation
   outside the payload.

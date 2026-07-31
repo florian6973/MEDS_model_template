@@ -12,6 +12,8 @@ Public surface:
 - :mod:`meds_model_base.schemas` — canonical + template schemas and validators.
 - :mod:`meds_model_base.tasks` — turning an external task file into split label parquets.
 - :mod:`meds_model_base.dispatch` — ``make_cli`` (the ``meds-model`` dispatcher) and ``register_resolvers``.
+- :mod:`meds_model_base.meds_dev` — ``meds-model-add-to-meds-dev``: installs ``model.yaml`` into a
+  MEDS-DEV checkout. Packaging tooling, not part of the command contract.
 
 Note: importing the default command implementations (or ``lightning`` / ``dispatch``) pulls in torch /
 lightning / meds-torch-data. :mod:`meds_model_base.schemas`, :mod:`meds_model_base.manifest` and

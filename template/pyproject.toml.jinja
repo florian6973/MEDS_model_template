@@ -35,6 +35,8 @@ aces = ["es-aces>=0.7.3"]
 
 [project.scripts]
 "meds-model" = "{{ model_slug }}.__main__:cli"
+# Packaging helper, not one of the five commands: copies `model.yaml` into a MEDS-DEV checkout.
+"meds-model-add-to-meds-dev" = "meds_model_base.meds_dev:main"
 
 [dependency-groups]
 dev = [
