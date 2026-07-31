@@ -5,16 +5,24 @@ The shared ``run`` is fixed for every implementation:
 1. validate the workspace and the arbitrated source;
 2. load the index of timepoints, **dropping any ground-truth labels**;
 3. call the implementation's :meth:`predict` hook;
-4. check coverage, validate against ``meds_evaluation.PredictionSchema``, and publish.
+4. check coverage, attach the ground truth for scoring, validate against
+   ``meds_evaluation.PredictionSchema``, and publish.
 
 Steps 1, 2 and 4 are not overridable. They are what makes every model's output comparable, and they are
 where the two failure modes that produce plausible-but-wrong results are caught:
 
-- **Ground truth never enters.** The index carries only ``(subject_id, prediction_time)``; a task's
-  ``boolean_value`` is discarded on load. Scoring is a separate tool.
+- **Ground truth never enters the model.** The index carries only ``(subject_id, prediction_time)``; a
+  task's ``boolean_value`` is discarded on load, so ``batch.boolean_value`` is absent and a model cannot
+  read the answer it is about to be scored against even by accident.
 - **Coverage is checked.** A model that scores only part of the index fails here rather than emitting a
   short file that looks like a complete run. ``n_expected`` and ``n_written`` land in the manifest per
   split so the invariant stays checkable afterwards.
+
+Note the first invariant is about *the model*, not about the output file. ``boolean_value`` is joined back
+on **after** ``predict`` has returned, because ``meds_evaluation`` scores a predictions file in isolation:
+its ``validate_binary_classification_schema`` lists ``boolean_value`` as a required field and raises
+without it. Emitting the labelless file makes a model unscorable by the very tool this output exists to
+feed. Set ``attach_labels=false`` to restore the labelless output.
 """
 
 from __future__ import annotations
@@ -109,7 +117,10 @@ class _PredictRunMixin:
             config=cfg,
             do_overwrite=bool(cfg.get("do_overwrite", False)),
         ) as (staging, extras):
-            table = validate_predictions(predictions.drop("split", strict=False).to_arrow())
+            scored = predictions.drop("split", strict=False)
+            if bool(cfg.get("attach_labels", True)):
+                scored = _attach_ground_truth(scored, cfg.external_labels_dir)
+            table = validate_predictions(scored.to_arrow())
             pq.write_table(table, staging / PREDICTIONS_FILENAME)
             extras["source"] = {"role": role or "packaged_model", "path": str(source_path or "")}
             extras["labels"] = label_summary
@@ -300,6 +311,27 @@ class ZeroShotPredictCommand(_PredictRunMixin, PredictCommand):
             f"{type(self).__name__}.resolve is not implemented. A zero-shot model must define how a task "
             "is resolved over its own outputs; there is no meaningful default."
         )
+
+
+def _attach_ground_truth(predictions: pl.DataFrame, external_labels_dir) -> pl.DataFrame:
+    """Join ``boolean_value`` onto finished predictions so ``meds-evaluation`` can score the file.
+
+    Called only after :meth:`predict` has returned, so the labels are never in scope while the model runs
+    — the "ground truth never enters" invariant is about the batch the model receives, not about the
+    artifact. ``meds_evaluation.validate_binary_classification_schema`` requires ``boolean_value``, so a
+    file without it is rejected by the scorer outright.
+
+    A label missing for some key leaves a null rather than dropping the row: coverage was already checked
+    against the same index, so a null here means the labels directory disagrees with itself, and losing
+    the row would hide that.
+    """
+    from ..tasks import read_labels
+
+    loaded = read_labels(external_labels_dir)
+    labels = pl.concat(loaded.values(), how="vertical_relaxed") if isinstance(loaded, dict) else loaded
+    return predictions.join(
+        labels.select([*KEYS, "boolean_value"]).unique(subset=KEYS), on=KEYS, how="left"
+    )
 
 
 def _labels_ref(labels_dir) -> dict:

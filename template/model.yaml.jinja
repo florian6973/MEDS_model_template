@@ -14,12 +14,17 @@
 ##
 ## `labels_dir` is available in every `supervised.*` slot (it is gated on dataset type, not on the slot),
 ## which is why no separate task-preparation step is needed: each command materializes what it needs.
+##
+## `metadata` is parsed into `MEDS_DEV.utils.Metadata`, which accepts exactly `description`, `contacts`
+## and `links` — nothing else. MEDS-DEV builds this at *import* time for every registered model, so an
+## extra key here raises TypeError and takes down the whole `meds-dev-*` CLI, not just this model.
+## In particular `requirements.txt` must NOT be declared: the loader discovers it from the model
+## directory on disk.
 metadata:
   description: "{{ model_description }}"
   contacts:
     - name: "{{ author_name }}"
       email: "{{ author_email }}"
-  requirements: requirements.txt
 
 commands:
 {% if profile == 'supervised' %}  supervised:

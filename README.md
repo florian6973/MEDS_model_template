@@ -53,9 +53,11 @@ keep in sync, which is what lets independent jobs materialize different tasks co
 
 These exist because each one otherwise produces output that looks correct:
 
-1. **`predict` never reads ground truth.** `boolean_value` is dropped when the index is loaded from
-   `external_labels_dir`; the repository
-   ends at predicted probabilities and scoring is a separate, shared tool.
+1. **The model never sees ground truth at prediction time.** `boolean_value` is dropped when the index is
+   loaded from `external_labels_dir`, so `batch.boolean_value` is absent and a model cannot read the
+   answer it is about to be scored against. It is joined back onto the output *after* `predict` returns,
+   because `meds-evaluation` scores a predictions file in isolation and requires the column; scoring
+   itself remains a separate, shared tool (`attach_labels=false` opts out).
 2. **Predictions cover the whole index.** A model that can only score part of a task fails rather than
    writing a short file, and `n_expected` / `n_written` are recorded per split in the manifest.
 3. **A warm start that matches no parameters is an error.** Non-strict checkpoint loading is what makes

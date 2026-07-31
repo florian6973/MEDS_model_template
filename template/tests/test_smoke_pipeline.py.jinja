@@ -116,8 +116,10 @@ def test_end_to_end(chain, data_dir, labels_dir, tmp_path):
     PredictionSchema.align(preds.to_arrow())
     assert "predicted_boolean_probability" in preds.columns
     assert {"subject_id", "prediction_time"}.issubset(preds.columns)
-    # And it never carries ground truth back out.
-    assert "boolean_value" not in preds.columns
+    # The ground truth is joined back on *after* the model ran: meds-evaluation scores a predictions file
+    # in isolation and rejects one without `boolean_value`. That the model itself never saw it is a
+    # separate property, checked by test_inference_never_sees_ground_truth above.
+    assert "boolean_value" in preds.columns
 
     manifest = yaml.safe_load((preds_dir / "manifest.yaml").read_text())
     coverage = manifest["coverage"]["held_out"]

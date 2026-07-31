@@ -1,8 +1,17 @@
 # Dependencies for MEDS-DEV's isolated per-model environment.
-# MEDS-DEV runs `uv pip install -r requirements.txt` in a fresh venv, so this must install THIS model
-# package (which vendors `meds_model_base`). Point it at your published repo, or install the local checkout:
 #
-#   {{ model_slug | replace('_', '-') }} @ git+https://github.com/YOUR_ORG/{{ model_slug }}.git
+# MEDS-DEV runs `uv pip install -r <abs path to this file>` in a fresh venv, from *its own* working
+# directory — not from your checkout. So this must install THIS model package (which vendors
+# `meds_model_base`) by an absolute or remote reference. A bare `-e .` resolves against MEDS-DEV's
+# directory and silently installs MEDS-DEV instead, after which the `meds-model` entry point does not
+# exist and every command fails with `meds-model: command not found`.
 #
-# For local MEDS-DEV runs against a checkout, an editable install of the current directory works:
--e .
+# Replace YOUR_ORG below with wherever this repository is published:
+{{ model_slug | replace('_', '-') }} @ git+https://github.com/YOUR_ORG/{{ model_slug }}.git
+
+# For a MEDS-DEV run against a local checkout, comment the line above and use an ABSOLUTE path instead:
+#
+#   -e /absolute/path/to/{{ model_slug }}
+#
+# `-e .` works only for `pip install -r requirements.txt` run from this directory by hand, never for
+# MEDS-DEV.
