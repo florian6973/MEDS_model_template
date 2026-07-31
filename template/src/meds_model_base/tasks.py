@@ -150,14 +150,24 @@ def split_labels(labels: pl.DataFrame, splits: pl.DataFrame) -> dict[str, pl.Dat
 
 
 def materialize_labels(
-    external_labels_dir: Path | str, patients_dir: Path | str, dest: Path | str
+    external_labels_dir: Path | str,
+    patients_dir: Path | str,
+    dest: Path | str,
+    *,
+    include_labels: bool = True,
 ) -> tuple[Path, dict[str, dict]]:
     """Write ``{split}.parquet`` under ``dest`` for meds-torch-data; return ``(dest, summary)``.
 
     This is the whole of what the removed ``preprocess_task`` command used to do, now run inline by
     whichever command needs a task. It is cheap — parquet in, parquet out, no model and no tensorization —
-    so repeating it per command costs little and removes a shared artifact that both commands would
-    otherwise have to agree on.
+    so repeating it per command costs little and removes a shared artifact that commands would otherwise
+    have to agree on.
+
+    ``include_labels=False`` writes only ``(subject_id, prediction_time)``. meds-torch-data distinguishes a
+    task *index* from task *labels* — ``boolean_value`` is optional — and without it ``batch.boolean_value``
+    is simply absent. That is what makes "prediction never reads ground truth" true of the batch a model
+    receives, not merely of the file it writes: at inference the labels are never put in front of the model
+    at all. Only training passes them.
     """
     dest = Path(dest)
     dest.mkdir(parents=True, exist_ok=True)
@@ -170,10 +180,12 @@ def materialize_labels(
     )
 
     for split, df in by_split.items():
+        if not include_labels:
+            df = df.drop("boolean_value")
         table = LabelSchema.align(df.to_arrow())
         pl.from_arrow(table).write_parquet(dest / f"{split}.parquet")
 
-    summary = summarize_labels(by_split)
+    summary = summarize_labels(by_split, include_positive_rate=include_labels)
     logger.info(
         "Materialized %d label rows across %d split(s) into %s.",
         sum(s["n"] for s in summary.values()),
@@ -183,19 +195,27 @@ def materialize_labels(
     return dest, summary
 
 
-def summarize_labels(by_split: dict[str, pl.DataFrame]) -> dict[str, dict]:
-    """Per-split label statistics recorded in the consuming command's manifest."""
+def summarize_labels(
+    by_split: dict[str, pl.DataFrame], *, include_positive_rate: bool = True
+) -> dict[str, dict]:
+    """Per-split label statistics recorded in the consuming command's manifest.
+
+    The positive rate is omitted wherever the labels themselves are — an inference artifact should not
+    carry an aggregate of the ground truth it is about to be scored against.
+    """
     summary: dict[str, dict] = {}
     for split, df in by_split.items():
         times = df["prediction_time"]
-        summary[split] = {
+        stats: dict = {
             "n": len(df),
-            "positive_rate": round(float(df["boolean_value"].mean()), 6) if len(df) else None,
             "prediction_time": {
                 "min": str(times.min()) if len(df) else None,
                 "max": str(times.max()) if len(df) else None,
             },
         }
+        if include_positive_rate:
+            stats["positive_rate"] = round(float(df["boolean_value"].mean()), 6) if len(df) else None
+        summary[split] = stats
     return summary
 
 

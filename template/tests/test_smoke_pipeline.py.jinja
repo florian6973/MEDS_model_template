@@ -29,6 +29,46 @@ def test_workspace_is_published_with_manifests(data_dir):
     assert (data_dir / "patients" / "metadata" / "subject_splits.parquet").is_file()
 
 
+def test_inference_never_sees_ground_truth(data_dir, labels_dir, tmp_path):
+    """At inference, the labels are not merely dropped from the output — they never reach the model.
+
+    `predict` and `infer` materialize the index without `boolean_value`. meds-torch-data distinguishes a
+    task *index* from task *labels*, so the batch handed to `predict_step` has no `boolean_value` at all,
+    and a model cannot read the answer it is about to be scored against even by accident.
+
+    Training is the opposite case and is checked here too, so the difference is deliberate rather than
+    incidental. Needs no model.
+    """
+    from meds_torchdata import MEDSPytorchDataset, MEDSTorchDataConfig
+    from meds_torchdata.types import SubsequenceSamplingStrategy
+    from meds_model_base.tasks import materialize_labels
+
+    patients = data_dir / "patients"
+
+    for include_labels, expect_labels in [(False, False), (True, True)]:
+        dest = tmp_path / f"labels_{include_labels}"
+        materialize_labels(labels_dir, patients, dest, include_labels=include_labels)
+
+        written = pl.read_parquet(dest / "held_out.parquet")
+        assert ("boolean_value" in written.columns) is expect_labels
+
+        dataset = MEDSPytorchDataset(
+            MEDSTorchDataConfig(
+                tensorized_cohort_dir=str(patients),
+                max_seq_len=32,
+                task_labels_dir=str(dest),
+                # meds-torch-data rejects any other strategy whenever task_labels_dir is set. Note it
+                # is not what enforces the as-of cutoff — `end_event_index` already bounds the window
+                # to events at or before prediction_time. TO_END only decides *which* of that allowed
+                # history you get: the most recent max_seq_len events rather than an earlier slice.
+                seq_sampling_strategy=SubsequenceSamplingStrategy.TO_END,
+            ),
+            split="held_out",
+        )
+        assert dataset.has_task_index, "the timepoints must always reach the model"
+        assert dataset.has_task_labels is expect_labels
+
+
 def test_conflicting_sources_are_rejected(data_dir, labels_dir, tmp_path):
     """Two prediction sources is an error, not a precedence decision. Needs no model."""
     if CommandName.predict not in COMMANDS or len(COMMANDS[CommandName.predict].sources) < 2:

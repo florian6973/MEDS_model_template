@@ -79,7 +79,12 @@ class _PredictRunMixin:
 
         with tempfile.TemporaryDirectory(prefix=".labels.", dir=data_dir) as tmp:
             labels_dir, label_summary = materialize_labels(
-                cfg.external_labels_dir, data_dir / PATIENTS_SUBDIR, Path(tmp) / "labels"
+                cfg.external_labels_dir,
+                data_dir / PATIENTS_SUBDIR,
+                Path(tmp) / "labels",
+                # Inference never sees ground truth: without boolean_value, meds-torch-data leaves
+                # `batch.boolean_value` absent rather than handing the model the answer.
+                include_labels=False,
             )
             cfg.datamodule.config.task_labels_dir = str(labels_dir)
             splits = resolve_splits(cfg)
