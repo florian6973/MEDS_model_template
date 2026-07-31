@@ -24,15 +24,15 @@ REPO = Path(__file__).resolve().parents[1]
 
 ALL_COMMANDS = {
     "preprocess_data",
-    "preprocess_task",
     "pretrain",
     "infer",
     "supervised_train",
     "predict",
 }
 
-#: Every DAG starts by materializing patient data and a task.
-ALWAYS = {"preprocess_data", "preprocess_task"}
+#: Every DAG starts by materializing patient data. A task is not a stage: the commands that need one
+#: take ``external_labels_dir`` directly, which is already what MEDS-DEV hands a model.
+ALWAYS = {"preprocess_data"}
 
 #: profile → the exact set of commands its ``commands.py`` should register. One entry per DAG in
 #: design-interface.md's "Supported pipeline chains".

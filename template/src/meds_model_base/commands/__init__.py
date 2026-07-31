@@ -13,7 +13,6 @@ from .base import (
     MEDSModelCommand,
     PredictCommand,
     PreprocessDataCommand,
-    PreprocessTaskCommand,
     PretrainCommand,
     SourceArbitrationError,
     SupervisedTrainCommand,
@@ -25,7 +24,6 @@ __all__ = [
     "CommandName",
     "MEDSModelCommand",
     "PreprocessDataCommand",
-    "PreprocessTaskCommand",
     "PretrainCommand",
     "InferCommand",
     "SupervisedTrainCommand",
@@ -34,7 +32,6 @@ __all__ = [
     "arbitrate_sources",
     # default implementations
     "DefaultPreprocessDataCommand",
-    "DefaultPreprocessTaskCommand",
     "DefaultPretrainCommand",
     "DefaultInferCommand",
     "DefaultSupervisedTrainCommand",
@@ -49,7 +46,6 @@ __all__ = [
 #: Default implementation → the module it lives in (imported lazily; see ``__getattr__``).
 _DEFAULTS = {
     "DefaultPreprocessDataCommand": "preprocess_data",
-    "DefaultPreprocessTaskCommand": "preprocess_task",
     "DefaultPretrainCommand": "train",
     "DefaultSupervisedTrainCommand": "train",
     "ProbeTrainCommand": "train",

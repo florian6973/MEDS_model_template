@@ -3,15 +3,17 @@
 ## MEDS-DEV runs each command string in an isolated environment (built from `requirements.txt`) and fills
 ## the {curly} placeholders. Only `supervised.predict` is mandatory.
 ##
-## Two impedance mismatches with the six-command interface, handled here rather than in the commands:
+## Two facts about MEDS-DEV shape what follows:
 ##
-##  * MEDS-DEV has no preprocess slot, so `preprocess_data` is folded into each train command, writing the
-##    shared workspace to {output_dir}/data.
-##  * MEDS-DEV passes an already-materialized `labels_dir` rather than a task definition, so
-##    `preprocess_task` is run over it with the `passed_through` path. Any boolean_value it carries is
-##    dropped before prediction — this model never reads ground truth.
+##  * There is no preprocess slot, so `preprocess_data` is folded into the first command of each chain,
+##    writing the shared workspace to {output_dir}/data.
+##  * `{model_initialization_dir}` is a single rolling pointer: it becomes the most recent *training*
+##    output. For a chain with both an unsupervised and a supervised train, that is not where the
+##    workspace lives — so `predict` omits `input_data_dir` entirely and recovers it from its source
+##    model's manifest, which recorded the workspace that model was trained on.
 ##
-## Adjust placeholder names to match your MEDS-DEV version if needed.
+## `labels_dir` is available in every `supervised.*` slot (it is gated on dataset type, not on the slot),
+## which is why no separate task-preparation step is needed: each command materializes what it needs.
 metadata:
   description: "{{ model_description }}"
   contacts:
@@ -23,51 +25,49 @@ commands:
 {% if profile == 'supervised' %}  supervised:
     train: |-
       meds-model preprocess_data external_meds_dir={dataset_dir} output_data_dir={output_dir}/data do_overwrite=true
-      meds-model preprocess_task input_data_dir={output_dir}/data external_task_file={labels_dir} do_overwrite=true
-      meds-model supervised_train input_data_dir={output_dir}/data output_supervised_model_dir={output_dir}/model
+      meds-model supervised_train input_data_dir={output_dir}/data external_labels_dir={labels_dir} output_supervised_model_dir={output_dir}/model
     predict: |-
-      meds-model predict input_data_dir={model_initialization_dir}/data input_supervised_model_dir={model_initialization_dir}/model splits=[{split}] output_predictions_dir={output_dir} do_overwrite=true
+      meds-model predict input_supervised_model_dir={model_initialization_dir}/model external_labels_dir={labels_dir} splits=[{split}] output_predictions_dir={output_dir} do_overwrite=true
 {% elif profile == 'finetune' %}  unsupervised:
     train: |-
       meds-model preprocess_data external_meds_dir={dataset_dir} output_data_dir={output_dir}/data do_overwrite=true
       meds-model pretrain input_data_dir={output_dir}/data output_pretrained_model_dir={output_dir}/pretrained
   supervised:
     train: |-
-      meds-model preprocess_task input_data_dir={model_initialization_dir}/data external_task_file={labels_dir} do_overwrite=true
-      meds-model supervised_train input_data_dir={model_initialization_dir}/data input_pretrained_model_dir={model_initialization_dir}/pretrained output_supervised_model_dir={output_dir}/model
+      meds-model supervised_train input_data_dir={model_initialization_dir}/data external_labels_dir={labels_dir} input_pretrained_model_dir={model_initialization_dir}/pretrained output_supervised_model_dir={output_dir}/model
     predict: |-
-      meds-model predict input_data_dir={model_initialization_dir}/data input_supervised_model_dir={model_initialization_dir}/model splits=[{split}] output_predictions_dir={output_dir} do_overwrite=true
+      meds-model predict input_supervised_model_dir={model_initialization_dir}/model external_labels_dir={labels_dir} splits=[{split}] output_predictions_dir={output_dir} do_overwrite=true
 {% elif profile == 'probe' %}  unsupervised:
     train: |-
       meds-model preprocess_data external_meds_dir={dataset_dir} output_data_dir={output_dir}/data do_overwrite=true
       meds-model pretrain input_data_dir={output_dir}/data output_pretrained_model_dir={output_dir}/pretrained
   supervised:
     train: |-
-      meds-model preprocess_task input_data_dir={model_initialization_dir}/data external_task_file={labels_dir} do_overwrite=true
-      meds-model infer input_data_dir={model_initialization_dir}/data input_pretrained_model_dir={model_initialization_dir}/pretrained do_overwrite=true
-      meds-model supervised_train input_data_dir={model_initialization_dir}/data input_inference_subdir=inference/embeddings output_supervised_model_dir={output_dir}/model
+      meds-model infer input_data_dir={model_initialization_dir}/data input_pretrained_model_dir={model_initialization_dir}/pretrained external_labels_dir={labels_dir} do_overwrite=true
+      meds-model supervised_train input_data_dir={model_initialization_dir}/data external_labels_dir={labels_dir} input_inference_subdir=inference/embeddings output_supervised_model_dir={output_dir}/model
     predict: |-
-      meds-model predict input_data_dir={model_initialization_dir}/data input_supervised_model_dir={model_initialization_dir}/model splits=[{split}] output_predictions_dir={output_dir} do_overwrite=true
+      meds-model predict input_supervised_model_dir={model_initialization_dir}/model external_labels_dir={labels_dir} splits=[{split}] output_predictions_dir={output_dir} do_overwrite=true
 {% elif profile == 'zero_shot_materialized' %}  unsupervised:
     train: |-
       meds-model preprocess_data external_meds_dir={dataset_dir} output_data_dir={output_dir}/data do_overwrite=true
       meds-model pretrain input_data_dir={output_dir}/data output_pretrained_model_dir={output_dir}/pretrained
   supervised:
+    train: null
     predict: |-
-      meds-model preprocess_task input_data_dir={model_initialization_dir}/data external_task_file={labels_dir} do_overwrite=true
-      meds-model infer input_data_dir={model_initialization_dir}/data input_pretrained_model_dir={model_initialization_dir}/pretrained do_overwrite=true
-      meds-model predict input_data_dir={model_initialization_dir}/data input_inference_subdir=inference/embeddings splits=[{split}] output_predictions_dir={output_dir} do_overwrite=true
-{% elif profile == 'packaged' %}  supervised:
+      meds-model infer input_data_dir={model_initialization_dir}/data input_pretrained_model_dir={model_initialization_dir}/pretrained external_labels_dir={labels_dir} do_overwrite=true
+      meds-model predict input_data_dir={model_initialization_dir}/data input_inference_subdir=inference/embeddings external_labels_dir={labels_dir} splits=[{split}] output_predictions_dir={output_dir} do_overwrite=true
+{% elif profile == 'packaged' %}  unsupervised: null
+  supervised:
+    train: null
     predict: |-
       meds-model preprocess_data external_meds_dir={dataset_dir} output_data_dir={output_dir}/data do_overwrite=true
-      meds-model preprocess_task input_data_dir={output_dir}/data external_task_file={labels_dir} do_overwrite=true
-      meds-model predict input_data_dir={output_dir}/data splits=[{split}] output_predictions_dir={output_dir} do_overwrite=true
+      meds-model predict input_data_dir={output_dir}/data external_labels_dir={labels_dir} splits=[{split}] output_predictions_dir={output_dir} do_overwrite=true
 {% else %}  unsupervised:
     train: |-
       meds-model preprocess_data external_meds_dir={dataset_dir} output_data_dir={output_dir}/data do_overwrite=true
       meds-model pretrain input_data_dir={output_dir}/data output_pretrained_model_dir={output_dir}/pretrained
   supervised:
+    train: null
     predict: |-
-      meds-model preprocess_task input_data_dir={model_initialization_dir}/data external_task_file={labels_dir} do_overwrite=true
-      meds-model predict input_data_dir={model_initialization_dir}/data input_pretrained_model_dir={model_initialization_dir}/pretrained splits=[{split}] output_predictions_dir={output_dir} do_overwrite=true
+      meds-model predict input_pretrained_model_dir={model_initialization_dir}/pretrained external_labels_dir={labels_dir} splits=[{split}] output_predictions_dir={output_dir} do_overwrite=true
 {% endif %}

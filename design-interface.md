@@ -38,12 +38,9 @@ tuning
 held_out
 ```
 
-### `external_task_file`
+### `external_labels_dir`
 
-Either:
-
-* an ACES task YAML; or
-* an already-materialized parquet file containing at least:
+A directory of parquet files in the MEDS label format, containing at least:
 
 ```text
 subject_id
@@ -51,7 +48,17 @@ prediction_time
 boolean_value
 ```
 
-Model-specific task columns are allowed.
+Model-specific task columns are allowed and ignored.
+
+This is deliberately **not** an ACES task YAML. Extracting labels from a task definition is
+`meds-dev-task`'s job upstream — it resolves dataset-specific predicates, which a model cannot do — and
+MEDS-DEV passes models only the materialized result. Duplicating that here would mean reimplementing
+predicate resolution against a spec we do not own.
+
+A consequence worth stating: a model receives *where* to predict, never *what*. Nothing in the labels
+identifies the task, and MEDS-DEV has no task-name placeholder. A zero-shot model that needs to know which
+task it is answering must obtain that itself — shipped alongside its weights, or via its own argument. The
+interface takes no position on how.
 
 ---
 
@@ -65,20 +72,24 @@ Model-specific task columns are allowed.
 data_dir/
 ├── patients/
 │   ├── metadata/
+│   │   ├── codes.parquet
+│   │   └── subject_splits.parquet
 │   └── manifest.yaml
-├── tasks/
-│   └── <task_name>/
-│       ├── train.parquet
-│       ├── tuning.parquet
-│       ├── held_out.parquet
-│       └── manifest.yaml
 └── inference/
     └── <inference_name>/
         ├── artifacts.parquet
         └── manifest.yaml
 ```
 
-The patient data is created once. Task preprocessing and inference add new subdirectories without copying the patient data.
+The patient data is created once; `infer` adds subdirectories without copying it.
+
+`subject_splits.parquet` is copied in by `preprocess_data` because meds-torch-data does not carry it
+through tensorization, and every command that materializes labels needs it to partition them. Copying a
+few kilobytes is what makes `patients/` self-contained — nothing downstream needs the raw dataset again.
+
+There is **no `tasks/` subdirectory**. A task is not a pipeline stage: the commands that need one take
+`external_labels_dir` and materialize the split layout meds-torch-data expects into their own work
+directory, which is an implementation detail rather than an artifact.
 
 There is deliberately **no `data_dir/manifest.yaml`**. Every artifact directory is self-describing, and the
 state of a `data_dir` is derived by scanning `tasks/*/manifest.yaml` and `inference/*/manifest.yaml`. A
@@ -134,7 +145,6 @@ Rules:
 | Command | `data_dir` access |
 | --- | --- |
 | `preprocess_data` | creates it |
-| `preprocess_task` | appends `tasks/<task_name>/` |
 | `infer` | appends `inference/<inference_name>/` |
 | `pretrain`, `supervised_train`, `predict` | read-only |
 
@@ -189,9 +199,8 @@ a *different* artifact than the one its sibling used, rather than silently produ
 | Artifact type | Additional fields |
 | --- | --- |
 | `data` (`patients/`) | source `external_meds_dir`; subject count per split; vocabulary size; tensorization parameters |
-| `task` | source `external_task_file`; `materialization: aces_extracted \| passed_through` (which of the two `external_task_file` forms was supplied); label count and positive rate per split; `prediction_time` range |
 | `inference` | **`kind`** — `embeddings \| trajectories \| hazards \| scores \| token_probabilities`; column schema (name → dtype → shape); the task subdirectory used, if any |
-| `pretrained_model`, `supervised_model` | checkpoint digest; monitored metric and best score; epochs, steps, seed; if warm-started: source directory **and the number of parameters actually matched** |
+| `pretrained_model`, `supervised_model` | the `external_labels_dir` used (path + content digest) and its per-split label summary; checkpoint digest; monitored metric and best score; epochs, steps, seed; if warm-started: source directory **and the number of parameters actually matched** |
 | `predictions` | **which prediction source was used** (see the arbitration rule under `predict`); `n_expected` and `n_written` per split; splits covered |
 
 Two of those exist specifically to convert silent-wrong-answer failures into loud ones. Recording the
@@ -235,37 +244,7 @@ output_data_dir/patients/manifest.yaml
 
 ---
 
-### 2. `preprocess_task`
-
-Materialize or validate a task against already-preprocessed patient data.
-
-Required parameters:
-
-```yaml
-input_data_dir: ...
-external_task_file: ...
-output_task_subdir: tasks/<task_name>
-```
-
-Example:
-
-```bash
-meds-model preprocess_task --config-name preprocess_task
-```
-
-Output:
-
-```text
-input_data_dir/tasks/<task_name>/
-```
-
-`output_task_subdir` is relative to `input_data_dir`.
-
-This command must not copy or rewrite `patients/`.
-
----
-
-### 3. `pretrain`
+### 2. `pretrain`
 
 Train a foundation model from patient data.
 
@@ -282,13 +261,13 @@ Example:
 meds-model pretrain --config-name pretrain
 ```
 
-The global interface does not include `input_task_subdir`.
+The global interface does not include `external_labels_dir`.
 
 Models such as EveryQuery may perform their own model-specific query or target preprocessing internally. That behavior is outside the shared interface.
 
 ---
 
-### 4. `infer`
+### 3. `infer`
 
 Materialize reusable outputs from a pretrained model.
 
@@ -303,7 +282,7 @@ output_inference_subdir: inference/<inference_name>
 Optional parameter:
 
 ```yaml
-input_task_subdir: tasks/<task_name>
+external_labels_dir: ...
 ```
 
 Example:
@@ -330,7 +309,7 @@ input_data_dir/inference/<inference_name>/manifest.yaml
 
 ---
 
-### 5. `supervised_train`
+### 4. `supervised_train`
 
 Train a supervised model.
 
@@ -338,7 +317,7 @@ Required parameters:
 
 ```yaml
 input_data_dir: ...
-input_task_subdir: tasks/<task_name>
+external_labels_dir: ...
 output_supervised_model_dir: ...
 ```
 
@@ -388,17 +367,28 @@ bypass it. The resolved source is recorded in the output model manifest.
 
 ---
 
-### 6. `predict`
+### 5. `predict`
 
 Produce standardized predictions.
 
 Required parameters:
 
 ```yaml
-input_data_dir: ...
-input_task_subdir: tasks/<task_name>
+external_labels_dir: ...
 output_predictions_dir: ...
 ```
+
+Optional, and usually omitted:
+
+```yaml
+input_data_dir: null    # recovered from the source artifact's manifest when unset
+```
+
+`input_data_dir` is optional because a caller may not be able to name it. MEDS-DEV's
+`model_initialization_dir` is a single rolling pointer that becomes the most recent *training* output,
+which for a pretrain-then-finetune chain is not where the workspace lives. Since every training artifact
+records the workspace it was built from, `predict` recovers it rather than requiring the caller to know —
+and rather than re-tensorizing. A model with no source artifact (`packaged`) must be given it explicitly.
 
 Optional prediction sources:
 
@@ -456,7 +446,7 @@ source is recorded in the predictions manifest.
 
 #### Coverage
 
-`predict` produces one row per row of the selected splits of `input_task_subdir`. It must fail if it cannot,
+`predict` produces one row per row of the selected splits of `external_labels_dir`. It must fail if it cannot,
 rather than emitting a short file: silently dropping index rows that the model happens not to cover turns a
 partial run into a plausible-looking complete one. The manifest records `n_expected` and `n_written` per
 split so the invariant is checkable after the fact.
@@ -485,7 +475,6 @@ predicted_boolean_probability
 
 ```text
 preprocess_data
-→ preprocess_task
 → supervised_train
 → predict
 ```
@@ -497,7 +486,6 @@ preprocess_data
 → pretrain
 
 preprocess_data
-→ preprocess_task
 → supervised_train using pretrained model
 → predict
 ```
@@ -509,8 +497,7 @@ preprocess_data
 → pretrain
 → infer embeddings
 
-preprocess_task
-→ supervised_train using inference artifacts
+supervised_train using inference artifacts
 → predict
 ```
 
@@ -520,8 +507,7 @@ preprocess_task
 preprocess_data
 → pretrain
 
-preprocess_task
-→ predict using pretrained model
+predict using pretrained model
 ```
 
 ### Materialized zero-shot
@@ -531,15 +517,13 @@ preprocess_data
 → pretrain
 → infer trajectories or native scores
 
-preprocess_task
-→ predict using inference artifacts
+predict using inference artifacts
 ```
 
 ### PFN-style
 
 ```text
 preprocess_data
-→ preprocess_task
 → predict using packaged model
 ```
 
@@ -549,7 +533,7 @@ preprocess_data
 
 A profile is a **configuration**, not a code-generation branch.
 
-Every generated repository ships all six commands. What distinguishes one profile from another is only which
+Every generated repository ships all five commands. What distinguishes one profile from another is only which
 commands are called and which optional inputs are supplied — and the parameter matrix below already captures
 both. So a profile reduces to one config file:
 
@@ -587,7 +571,6 @@ configs/
 ├── paths/
 │   └── default.yaml
 ├── preprocess_data.yaml
-├── preprocess_task.yaml
 ├── pretrain.yaml
 ├── infer.yaml
 ├── supervised_train.yaml
@@ -625,7 +608,7 @@ defaults:
   - _self_
 
 input_data_dir: ${data_dir}
-input_task_subdir: ${tasks.mortality}
+external_labels_dir: ${labels.mortality}
 input_pretrained_model_dir: ${models.pretrained}
 output_inference_subdir: ${inference.embeddings}
 ```
@@ -634,7 +617,6 @@ Each command remains independently executable:
 
 ```bash
 meds-model preprocess_data --config-name preprocess_data
-meds-model preprocess_task --config-name preprocess_task
 meds-model pretrain --config-name pretrain
 meds-model infer --config-name infer
 meds-model supervised_train --config-name supervised_train
@@ -666,11 +648,10 @@ template defaults
 | Command            | Required parameters                                                       | Optional parameters                                                                  |
 | ------------------ | ------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
 | `preprocess_data`  | `external_meds_dir`, `output_data_dir`                                    | —                                                                                    |
-| `preprocess_task`  | `input_data_dir`, `external_task_file`, `output_task_subdir`              | —                                                                                    |
 | `pretrain`         | `input_data_dir`, `output_pretrained_model_dir`                           | —                                                                                    |
-| `infer`            | `input_data_dir`, `input_pretrained_model_dir`, `output_inference_subdir` | `input_task_subdir`                                                                  |
-| `supervised_train` | `input_data_dir`, `input_task_subdir`, `output_supervised_model_dir`      | `input_pretrained_model_dir`, `input_inference_subdir`                               |
-| `predict`          | `input_data_dir`, `input_task_subdir`, `output_predictions_dir`           | `input_pretrained_model_dir`, `input_supervised_model_dir`, `input_inference_subdir`, `splits` |
+| `infer`            | `input_data_dir`, `input_pretrained_model_dir`, `output_inference_subdir` | `external_labels_dir`                                                                  |
+| `supervised_train` | `input_data_dir`, `external_labels_dir`, `output_supervised_model_dir`    | `input_pretrained_model_dir`, `input_inference_subdir`                               |
+| `predict`          | `external_labels_dir`, `output_predictions_dir`                           | `input_data_dir`,  `input_pretrained_model_dir`, `input_supervised_model_dir`, `input_inference_subdir`, `splits` |
 
 For `supervised_train` and `predict`, the optional model/inference sources are mutually exclusive; see the
 argument arbitration rules in each command's section.
@@ -699,9 +680,17 @@ argument arbitration rules in each command's section.
 
 **MEDS-DEV mapping.** MEDS-DEV drives a `{unsupervised, supervised} × {train, predict}` command grid, passes
 a `labels_dir` directly, and has no slot for a separate task-materialization step. Six commands and a DAG need
-an explicit projection onto that grid — in particular where `preprocess_task` runs, and whether the
-`data_dir` survives between the train and predict invocations. This should be settled against a live
-MEDS-DEV run before the interface is frozen.
+an explicit projection onto that grid. Verified against MEDS-DEV as of this writing:
+
+* `labels_dir` is gated on **dataset type, not slot** — it is available in `supervised.train` as well as
+  `supervised.predict`, so no separate task-preparation step is needed.
+* `model_initialization_dir` rolls forward to the most recent non-predict run's output directory, which is
+  why `predict` recovers `input_data_dir` from its source manifest instead of being told.
+* The available placeholders are `dataset_dir`, `model_dir`, `demo`, `output_dir`, `labels_dir`,
+  `model_initialization_dir` and `split`. There is **no task-name placeholder**, which is what makes
+  zero-shot task resolution a model-side concern.
+
+Still unvalidated: an actual end-to-end MEDS-DEV run against a generated repository.
 
 **`infer` from non-pretrained sources.** `input_pretrained_model_dir` is required, so representations cannot
 be materialized from a supervised model or a packaged model. This is deliberate: the packaged-model path is

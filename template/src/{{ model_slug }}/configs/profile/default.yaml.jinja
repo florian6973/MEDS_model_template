@@ -7,6 +7,9 @@
 # `chain` below is the authoritative description of this shape, and the template's render tests assert it
 # matches `commands.py` exactly — the two cannot drift.
 #
+# A task is not a pipeline stage: every command that needs one takes `external_labels_dir` directly,
+# because that is already what MEDS-DEV hands a model.
+#
 # Loaded last in every command's defaults list, so anything set here wins over the generic defaults. Put
 # model-specific overrides here; leave the artifact sources unset (they are per-run, and a wrong default
 # would silently point a run at the wrong artifact).
@@ -15,7 +18,6 @@ profile:
   name: {{ profile }}
 {% if profile == 'supervised' %}  chain:
     - preprocess_data
-    - preprocess_task
     - supervised_train
     - predict
   notes: >-
@@ -23,7 +25,6 @@ profile:
 {% elif profile == 'finetune' %}  chain:
     - preprocess_data
     - pretrain
-    - preprocess_task
     - supervised_train
     - predict
   notes: >-
@@ -32,7 +33,6 @@ profile:
 {% elif profile == 'probe' %}  chain:
     - preprocess_data
     - pretrain
-    - preprocess_task
     - infer
     - supervised_train
     - predict
@@ -43,7 +43,6 @@ profile:
 {% elif profile == 'zero_shot_direct' %}  chain:
     - preprocess_data
     - pretrain
-    - preprocess_task
     - predict
   notes: >-
     Score a task straight from the pretrained model via input_pretrained_model_dir. Implement `resolve` in
@@ -51,7 +50,6 @@ profile:
 {% elif profile == 'zero_shot_materialized' %}  chain:
     - preprocess_data
     - pretrain
-    - preprocess_task
     - infer
     - predict
   notes: >-
@@ -59,7 +57,6 @@ profile:
     re-run per task and its outputs stay inspectable. Analogous to MEDS-EIC-AR generating trajectories once.
 {% elif profile == 'packaged' %}  chain:
     - preprocess_data
-    - preprocess_task
     - predict
   notes: >-
     Weights ship with the repository, so there is nothing to train. `predict` runs with no source

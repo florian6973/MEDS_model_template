@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## What this repo is
 
 A [Copier](https://copier.readthedocs.io) **template** (not an application) that generates MEDS model
-repositories exposing a shared six-command interface (`meds-model <command>`), contributable to
+repositories exposing a shared five-command interface (`meds-model <command>`), contributable to
 [MEDS-DEV](https://github.com/Medical-Event-Data-Standard/MEDS-DEV).
 
 Two distinct codebases live here, and they are built/tested differently:
@@ -116,7 +116,7 @@ and drops in). That is the agreed follow-up — not a reason to put a model back
 
 ### The command contract
 
-`template/src/meds_model_base/commands/base.py` defines `CommandName` (six commands) and the
+`template/src/meds_model_base/commands/base.py` defines `CommandName` (five commands) and the
 `MEDSModelCommand` ABC hierarchy. Each command class carries `name`, `config_name` (its Hydra root, named
 after the command), `sources` (alternative input parameters), `supported_sources` (the subset this
 implementation handles), and `require_source`.
@@ -143,12 +143,19 @@ Three places consume manifests for real behavior, not just provenance:
 
 - `_runtime.load_trained_module` reads `module_class` from the model artifact, **not** `cfg.model._target_`
   — a checkpoint is loadable only by the class that wrote it.
-- `preprocess_task` recovers the raw MEDS location from the `patients/` manifest for ACES extraction.
-- `ProbePredictCommand` recovers which embeddings to score from the probe's own manifest, and
-  `predict.task_definition_path()` recovers the ACES YAML from the task manifest for zero-shot models.
+- `resolve_workspace` recovers `input_data_dir` from the source model's manifest when `predict` is not
+  given one — which is what makes MEDS-DEV's rolling `model_initialization_dir` usable without
+  re-tensorizing.
+- `ProbePredictCommand` recovers which embeddings to score from the probe's own manifest.
 
-That last pattern is why `predict` needs no extra task-definition or embeddings argument: adding one would
-invite exactly the mismatch the manifest exists to prevent.
+That pattern is why `predict` needs no workspace or embeddings argument: adding one would invite exactly
+the mismatch the manifest exists to prevent.
+
+**There is no `preprocess_task` command and no task artifact.** Tasks arrive as `external_labels_dir` — a
+MEDS labels directory, which is what `meds-dev-task` produces and all MEDS-DEV ever passes a model. Each
+command that needs one materializes the split layout meds-torch-data wants into its own work directory.
+The template never parses ACES: resolving a task *definition* needs dataset-specific predicates it does
+not have, and a zero-shot model that needs to know *what* it is predicting must arrange that itself.
 
 ### Import-weight discipline (load-bearing)
 
@@ -215,12 +222,11 @@ chain — so a DAG whose wiring and implementation disagree fails instead of sil
 
 ## Known gaps
 
-- **ACES extraction is unverified.** `tasks.extract_with_aces` calls the documented `es-aces` API but has
-  never been run against a live install; results are normalized through `normalize_label_columns` rather
-  than assuming column names. The pre-materialized-labels path has no ACES dependency and is what the
-  smoke tests exercise.
-- **Zero-shot prediction is not covered end-to-end** by the smoke tests: it needs a task *definition*, and
-  the `meds_testing_helpers` fixture supplies pre-materialized labels, so that leg is skipped explicitly.
-- **No MEDS-DEV mapping has been validated.** `model.yaml.jinja` folds `preprocess_data` into the train
-  commands and runs `preprocess_task` over the supplied `labels_dir`, but this has not been run against a
-  live MEDS-DEV checkout. See the open questions in `design-interface.md`.
+- **No end-to-end MEDS-DEV run.** `model.yaml.jinja` is written against MEDS-DEV's actual placeholder
+  contract (checked against its source and two real models), but has never been executed by MEDS-DEV.
+- **Nothing trains.** A generated repo ships no model, so no chain has ever run training or prediction —
+  only preprocessing, dispatch and config composition. Closing that needs a reference implementation
+  outside the payload.
+- **Zero-shot task resolution is unspecified by design.** MEDS-DEV passes no task definition and has no
+  task-name placeholder, so a zero-shot model must obtain it some other way. The template deliberately
+  takes no position; revisit once the supervised chains are validated.

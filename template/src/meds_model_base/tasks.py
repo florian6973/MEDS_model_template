@@ -1,36 +1,32 @@
-"""Task materialization: turn an ``external_task_file`` into split label parquets.
+"""Turning an external labels directory into the split layout meds-torch-data expects.
 
-``preprocess_task`` accepts either form of external task file:
+A task reaches this model as ``external_labels_dir``: a directory of parquet files in the MEDS label
+format (``subject_id``, ``prediction_time``, ``boolean_value``), exactly what MEDS-DEV's ``meds-dev-task``
+produces and passes to models. The template does **not** extract tasks from ACES definitions — that is
+``meds-dev-task``'s job upstream, and duplicating it here would mean reimplementing dataset-specific
+predicate resolution.
 
-- an **ACES task YAML**, which is extracted against the raw MEDS dataset that ``preprocess_data`` consumed
-  (its location is recovered from the ``patients/`` manifest, so the caller need not repeat it); or
-- an **already-materialized** parquet (or directory of ``{split}.parquet``) carrying at least
-  ``subject_id``, ``prediction_time`` and ``boolean_value``.
+What remains is genuinely model-side: labels have to be partitioned into ``{train,tuning,held_out}.parquet``
+before meds-torch-data can use them as a ``task_labels_dir``. That is a per-command implementation detail
+rather than a published artifact — :func:`materialize_labels` writes it into a command's work directory.
 
-Either way the result is written as one parquet per split, which is the layout meds-torch-data expects for
-``task_labels_dir`` and therefore what both ``supervised_train`` and ``predict`` consume. Which of the two
-paths was taken is recorded in the task manifest as ``materialization``.
-
-Dependency-light: polars + pyarrow. ``es-aces`` is imported lazily, so models that only ever pass
-pre-extracted labels never need it installed.
+Consequently a *task definition* never enters this package. A zero-shot model that needs to know **what**
+it is predicting, not merely where, must obtain that itself (weights, a shipped mapping, an extra
+override); see the rendered ``predict.py``.
 """
 
 from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 import polars as pl
 
 from .schemas import SPLITS, LabelSchema, subject_splits_filepath
 
-if TYPE_CHECKING:  # pragma: no cover - typing only
-    from aces.config import TaskExtractorConfig
-
 logger = logging.getLogger(__name__)
 
-#: Column aliases accepted from an ACES result or a hand-built label table, in priority order.
+#: Column aliases accepted from a hand-built or upstream label table, in priority order.
 _COLUMN_ALIASES = {
     "subject_id": ("subject_id", "patient_id"),
     "prediction_time": ("prediction_time", "index_timestamp", "trigger"),
@@ -39,41 +35,15 @@ _COLUMN_ALIASES = {
 
 
 class TaskMaterializationError(RuntimeError):
-    """Raised when a task file cannot be turned into split label parquets."""
-
-
-def load_task_config(task_path: str | Path, predicates_path: str | Path | None = None) -> TaskExtractorConfig:
-    """Parse an ACES task YAML into a ``TaskExtractorConfig`` (predicates / trigger / windows / label).
-
-    Reads only the task *definition* — no data is touched. Zero-shot and query models use this to learn what
-    to predict; ``es-aces`` is imported lazily so models that never parse a task avoid the dependency.
-    """
-    from aces.config import TaskExtractorConfig
-
-    return TaskExtractorConfig.load(
-        config_path=Path(task_path),
-        predicates_path=Path(predicates_path) if predicates_path else None,
-    )
-
-
-def is_aces_task_file(task_file: Path | str) -> bool:
-    """Whether ``task_file`` is an ACES YAML (as opposed to materialized labels).
-
-    Examples:
-        >>> is_aces_task_file("tasks/mortality.yaml")
-        True
-        >>> is_aces_task_file("labels/mortality.parquet")
-        False
-    """
-    return Path(task_file).suffix.lower() in {".yaml", ".yml"}
+    """Raised when a labels directory cannot be turned into split label parquets."""
 
 
 def normalize_label_columns(df: pl.DataFrame, *, source: str) -> pl.DataFrame:
     """Rename a label table's columns to the canonical MEDS names and drop the rest.
 
-    ACES output and hand-built label files vary in what they call the trigger time and the label, and the
-    exact names have changed across ``es-aces`` releases. Rather than pin one spelling, accept the known
-    aliases and fail with the observed columns listed when none matches.
+    Upstream label files vary in what they call the trigger time and the label, and the spellings have
+    changed across tool versions. Rather than pin one, accept the known aliases and fail with the observed
+    columns listed when none matches.
 
     Examples:
         >>> import polars as pl
@@ -96,53 +66,58 @@ def normalize_label_columns(df: pl.DataFrame, *, source: str) -> pl.DataFrame:
     return df.rename(rename).select(["subject_id", "prediction_time", "boolean_value"])
 
 
-def extract_with_aces(
-    task_yaml: Path | str,
-    meds_dir: Path | str,
-    predicates_path: Path | str | None = None,
-) -> pl.DataFrame:
-    """Run ACES over the raw MEDS dataset to materialize ``subject_id, prediction_time, boolean_value``.
+def read_labels(external_labels_dir: Path | str) -> pl.DataFrame | dict[str, pl.DataFrame]:
+    """Read a labels directory (or single parquet) into canonical form.
 
-    .. note::
-       This calls the documented ``es-aces`` programmatic API (``get_predicates_df`` → ``query``). That API
-       has moved across releases, so the result is normalized through :func:`normalize_label_columns`
-       rather than assuming column names, and any failure is re-raised with the ACES error attached. If
-       your ``es-aces`` version is incompatible, materialize the labels yourself and pass the parquet as
-       ``external_task_file`` — that path has no ACES dependency at all.
+    A directory may be organized either way, and both occur:
+
+    - **already split** — ``{train,tuning,held_out}.parquet``. Returned keyed by split; no subject-split
+      table is needed.
+    - **arbitrary shards** — any other ``*.parquet`` layout, which is what MEDS-DEV and the
+      ``meds_testing_helpers`` fixtures produce (``labels_A.parquet``, ``labels_B.parquet``, …). Returned
+      as one frame, to be partitioned by :func:`split_labels`.
+
+    Shard names carry no meaning, so they are concatenated rather than interpreted — guessing a split from
+    a filename would silently mis-assign subjects.
     """
-    from omegaconf import DictConfig
+    p = Path(external_labels_dir)
+    if p.is_dir():
+        by_split = {
+            split: pl.read_parquet(p / f"{split}.parquet")
+            for split in SPLITS
+            if (p / f"{split}.parquet").is_file()
+        }
+        if by_split:
+            return {
+                split: normalize_label_columns(df, source=f"{p / f'{split}.parquet'}")
+                for split, df in by_split.items()
+            }
 
-    try:
-        from aces import predicates as aces_predicates
-        from aces import query as aces_query
-    except ImportError as e:  # pragma: no cover - depends on the install
-        raise TaskMaterializationError(
-            "Extracting an ACES task YAML requires `es-aces` (pip install 'es-aces>=0.7.3'), or supply "
-            "pre-materialized labels as external_task_file instead."
-        ) from e
+        shards = sorted(p.rglob("*.parquet"))
+        if not shards:
+            raise TaskMaterializationError(f"{p} is a directory but contains no parquet files.")
+        logger.info("Reading %d label shard(s) from %s.", len(shards), p)
+        return pl.concat(
+            [normalize_label_columns(pl.read_parquet(fp), source=str(fp)) for fp in shards],
+            how="vertical_relaxed",
+        ).unique(maintain_order=True)
 
-    task_cfg = load_task_config(task_yaml, predicates_path)
-    data_config = DictConfig({"path": str(Path(meds_dir) / "data" / "**/*.parquet"), "standard": "meds"})
-
-    try:
-        predicates_df = aces_predicates.get_predicates_df(task_cfg, data_config)
-        result = aces_query.query(task_cfg, predicates_df)
-    except Exception as e:
-        raise TaskMaterializationError(
-            f"ACES extraction of {task_yaml} against {meds_dir} failed: {e}"
-        ) from e
-
-    df = result if isinstance(result, pl.DataFrame) else pl.DataFrame(result)
-    return normalize_label_columns(df, source=f"ACES output for {Path(task_yaml).name}")
+    if not p.is_file():
+        raise TaskMaterializationError(f"external_labels_dir {p} does not exist.")
+    return normalize_label_columns(pl.read_parquet(p), source=str(p))
 
 
-def load_subject_splits(meds_dir: Path | str) -> pl.DataFrame:
-    """Load ``metadata/subject_splits.parquet`` from a raw MEDS root."""
-    fp = Path(meds_dir) / subject_splits_filepath
+def load_subject_splits(patients_dir: Path | str) -> pl.DataFrame:
+    """Load the subject-split table from a published ``patients/`` artifact.
+
+    ``preprocess_data`` copies this out of the source dataset precisely so that later commands do not
+    depend on the raw MEDS directory still existing — meds-torch-data does not preserve it itself.
+    """
+    fp = Path(patients_dir) / subject_splits_filepath
     if not fp.is_file():
         raise TaskMaterializationError(
-            f"No subject splits at {fp}. A canonical MEDS dataset must define train/tuning/held_out splits "
-            "before a task can be materialized against it."
+            f"No subject splits at {fp}. The patients artifact was built by an older version of this "
+            "template; re-run `preprocess_data` to record them."
         )
     return pl.read_parquet(fp)
 
@@ -168,68 +143,48 @@ def split_labels(labels: pl.DataFrame, splits: pl.DataFrame) -> dict[str, pl.Dat
             out[split] = part
     if not out:
         raise TaskMaterializationError(
-            "No label rows fell into any MEDS split; check that the task and the dataset refer to the same "
-            "subject ids."
+            "No label rows fell into any MEDS split; check that the labels and the dataset refer to the "
+            "same subject ids."
         )
     return out
 
 
-def read_materialized_labels(task_file: Path | str) -> pl.DataFrame | dict[str, pl.DataFrame]:
-    """Read pre-materialized labels from a parquet file or a directory of them.
+def materialize_labels(
+    external_labels_dir: Path | str, patients_dir: Path | str, dest: Path | str
+) -> tuple[Path, dict[str, dict]]:
+    """Write ``{split}.parquet`` under ``dest`` for meds-torch-data; return ``(dest, summary)``.
 
-    A directory may be organized either way, and both occur in the wild:
-
-    - **already split** — ``{train,tuning,held_out}.parquet``, which is what ``preprocess_task`` itself
-      writes, so a materialized task can be fed straight back in. Returned keyed by split; no subject-split
-      table is needed.
-    - **arbitrary shards** — any other ``*.parquet`` layout, which is what MEDS-DEV and the
-      ``meds_testing_helpers`` fixtures produce (``labels_A.parquet``, ``labels_B.parquet``, …). Returned
-      as one frame, to be partitioned by :func:`split_labels`.
-
-    Shard names carry no meaning, so they are concatenated rather than interpreted — guessing a split from
-    a filename would silently mis-assign subjects.
+    This is the whole of what the removed ``preprocess_task`` command used to do, now run inline by
+    whichever command needs a task. It is cheap — parquet in, parquet out, no model and no tensorization —
+    so repeating it per command costs little and removes a shared artifact that both commands would
+    otherwise have to agree on.
     """
-    p = Path(task_file)
-    if p.is_dir():
-        by_split = {
-            split: pl.read_parquet(p / f"{split}.parquet")
-            for split in SPLITS
-            if (p / f"{split}.parquet").is_file()
-        }
-        if by_split:
-            return {
-                split: normalize_label_columns(df, source=f"{p / f'{split}.parquet'}")
-                for split, df in by_split.items()
-            }
+    dest = Path(dest)
+    dest.mkdir(parents=True, exist_ok=True)
 
-        shards = sorted(fp for fp in p.rglob("*.parquet"))
-        if not shards:
-            raise TaskMaterializationError(f"{p} is a directory but contains no parquet files.")
-        logger.info("Reading %d label shard(s) from %s.", len(shards), p)
-        return pl.concat(
-            [normalize_label_columns(pl.read_parquet(fp), source=str(fp)) for fp in shards],
-            how="vertical_relaxed",
-        ).unique(maintain_order=True)
-    if not p.is_file():
-        raise TaskMaterializationError(f"external_task_file {p} does not exist.")
-    return normalize_label_columns(pl.read_parquet(p), source=str(p))
+    loaded = read_labels(external_labels_dir)
+    by_split = (
+        loaded
+        if isinstance(loaded, dict)
+        else split_labels(loaded, load_subject_splits(patients_dir))
+    )
 
-
-def write_task_splits(by_split: dict[str, pl.DataFrame], dest: Path) -> dict[str, int]:
-    """Write ``{split}.parquet`` files, validating each against ``meds.LabelSchema``.
-
-    Returns row counts per split (recorded in the task manifest).
-    """
-    counts: dict[str, int] = {}
     for split, df in by_split.items():
         table = LabelSchema.align(df.to_arrow())
         pl.from_arrow(table).write_parquet(dest / f"{split}.parquet")
-        counts[split] = table.num_rows
-    return counts
+
+    summary = summarize_labels(by_split)
+    logger.info(
+        "Materialized %d label rows across %d split(s) into %s.",
+        sum(s["n"] for s in summary.values()),
+        len(summary),
+        dest,
+    )
+    return dest, summary
 
 
 def summarize_labels(by_split: dict[str, pl.DataFrame]) -> dict[str, dict]:
-    """Per-split label statistics for the task manifest (count, positive rate, prediction_time range)."""
+    """Per-split label statistics recorded in the consuming command's manifest."""
     summary: dict[str, dict] = {}
     for split, df in by_split.items():
         times = df["prediction_time"]
@@ -242,3 +197,14 @@ def summarize_labels(by_split: dict[str, pl.DataFrame]) -> dict[str, dict]:
             },
         }
     return summary
+
+
+__all__ = [
+    "TaskMaterializationError",
+    "load_subject_splits",
+    "materialize_labels",
+    "normalize_label_columns",
+    "read_labels",
+    "split_labels",
+    "summarize_labels",
+]

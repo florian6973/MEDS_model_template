@@ -23,12 +23,11 @@ dependencies = [
   "polars>=1.30,<2",
   "pyarrow",
   "numpy",
-  # Task materialization (`preprocess_task`) extracts ACES task definitions. Models that only ever
-  # receive pre-materialized labels can drop this and use the `aces` extra instead.
-  "es-aces>=0.7.3",
 ]
 
 [project.optional-dependencies]
+# The template never parses ACES: tasks arrive as materialized labels (see `meds-dev-task`). A model
+# that chooses to interpret a task definition itself can install this.
 aces = ["es-aces>=0.7.3"]
 {% if use_wandb %}wandb = ["wandb"]
 {% endif %}{% if use_mlflow %}mlflow = ["mlflow", "psutil", "pynvml"]

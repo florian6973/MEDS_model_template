@@ -104,7 +104,7 @@ profile:
   type: str
   help: "Which DAG of commands this model implements (the model itself is yours to write)"
   choices:
-    "supervised — preprocess_data, preprocess_task, supervised_train, predict": "supervised"
+    "supervised — preprocess_data, supervised_train, predict": "supervised"
     "finetune — pretrain, then supervised_train from the pretrained model": "finetune"
     "probe — pretrain, infer embeddings, train a head on the frozen features": "probe"
     "zero_shot_direct — pretrain, then score a task straight from the model": "zero_shot_direct"
@@ -113,8 +113,8 @@ profile:
     "custom — choose each command yourself": "custom"
   default: "supervised"
 
-# Command toggles, only *asked* for the custom profile. `preprocess_data` and `preprocess_task` are always
-# supported: every chain starts by materializing patient data and a task.
+# Command toggles, only *asked* for the custom profile. `preprocess_data` is always supported: every
+# chain starts by materializing patient data. Tasks are not a stage — commands take external_labels_dir.
 implements_pretrain:
   type: bool
   help: "Support the `pretrain` command (foundation-model pretraining)?"

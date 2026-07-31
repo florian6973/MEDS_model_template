@@ -26,8 +26,8 @@ def cli():
 def chain():
     """Run every command this model registers over a prepared ``data_dir``."""
 
-    def _chain(data_dir: Path, out_dir: Path, **kwargs):
-        return run_chain(COMMANDS, data_dir, out_dir, **kwargs)
+    def _chain(data_dir: Path, labels_dir: Path, out_dir: Path, **kwargs):
+        return run_chain(COMMANDS, data_dir, labels_dir, out_dir, **kwargs)
 
     return _chain
 
@@ -39,8 +39,8 @@ def meds_root(simple_static_MEDS_dataset_with_task) -> Path:
 
 
 @pytest.fixture(scope="session")
-def external_task_file(meds_root) -> Path:
-    """Pre-materialized task labels inside the fixture (subject_id, prediction_time, boolean_value)."""
+def labels_dir(meds_root) -> Path:
+    """A MEDS labels directory inside the fixture (subject_id, prediction_time, boolean_value)."""
     task_root = meds_root / "task_labels"
     tasks = sorted(p for p in task_root.iterdir() if p.is_dir())
     assert tasks, f"No task_labels/* directory under {meds_root}"
@@ -48,7 +48,7 @@ def external_task_file(meds_root) -> Path:
 
 
 @pytest.fixture(scope="session")
-def data_dir(meds_root, external_task_file, tmp_path_factory) -> Path:
-    """A shared workspace with patients/ and one materialized task, built once for the session."""
+def data_dir(meds_root, tmp_path_factory) -> Path:
+    """A shared workspace with patients/, built once for the session. Labels are not preprocessed."""
     workspace = tmp_path_factory.mktemp("workspace") / "data"
-    return build_workspace(meds_root, external_task_file, workspace)
+    return build_workspace(meds_root, workspace)

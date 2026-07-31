@@ -15,8 +15,8 @@ input_data_dir: ${data_dir}
 input_pretrained_model_dir: ${models.pretrained}
 output_inference_subdir: ${inference.embeddings}
 
-#: Fixes the timepoints to infer at.
-input_task_subdir: ${tasks.default}
+#: Fixes the timepoints to infer at. A MEDS labels directory.
+external_labels_dir: ???
 
 #: Which splits to cover; null means every split present in the task.
 splits: null

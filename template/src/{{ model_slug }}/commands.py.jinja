@@ -1,7 +1,4 @@
-{%- set entries = [
-  ('preprocess_data', 'DefaultPreprocessDataCommand'),
-  ('preprocess_task', 'DefaultPreprocessTaskCommand'),
-] -%}
+{%- set entries = [('preprocess_data', 'DefaultPreprocessDataCommand')] -%}
 {%- if profile == 'supervised' -%}
   {%- set _ = entries.append(('supervised_train', 'DefaultSupervisedTrainCommand')) -%}
   {%- set _ = entries.append(('predict', 'SupervisedPredictCommand')) -%}
@@ -31,7 +28,7 @@
 {%- endif -%}
 {%- set classes = entries | map(attribute=1) | list -%}
 {%- set base_imports = ['CommandName'] + (classes | reject('equalto', 'PredictCommand') | list | unique | sort | list) -%}
-"""Which of the six commands this model supports — the ``{{ profile }}`` DAG.
+"""Which of the five commands this model supports — the ``{{ profile }}`` DAG.
 
 The ``COMMANDS`` registry maps each supported
 :class:`~meds_model_base.commands.base.CommandName` to the class implementing it. ``meds-model`` consults

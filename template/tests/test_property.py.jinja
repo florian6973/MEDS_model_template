@@ -28,8 +28,9 @@ pytestmark = pytest.mark.slow
 def _predictions_for(chain, tmp_path, name: str, *, shuffle_labels: bool, seed: int):
     """Build a synthetic dataset, run the DAG over it, and return (predictions, held-out labels)."""
     raw = build_signal_dataset(tmp_path / f"raw_{name}", seed=seed, shuffle_labels=shuffle_labels)
-    data_dir = build_workspace(raw, raw / "task_labels" / "signal_task", tmp_path / f"data_{name}")
-    artifacts = chain(data_dir, tmp_path / f"out_{name}", epochs=25, batch_size=16)
+    labels_dir = raw / "task_labels" / "signal_task"
+    data_dir = build_workspace(raw, tmp_path / f"data_{name}")
+    artifacts = chain(data_dir, labels_dir, tmp_path / f"out_{name}", epochs=25, batch_size=16)
     assert "predictions" in artifacts, "this DAG does not register `predict`, so it cannot be evaluated"
     return (
         pl.read_parquet(artifacts["predictions"] / "predictions.parquet"),

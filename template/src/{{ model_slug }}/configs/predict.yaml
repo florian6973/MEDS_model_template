@@ -11,8 +11,13 @@ defaults:
   - _self_
   - profile: default
 
-input_data_dir: ${data_dir}
-input_task_subdir: ${tasks.default}
+#: Optional: when omitted it is recovered from the source artifact's manifest, which is what lets a
+#: caller point only at a model whose workspace lives elsewhere.
+input_data_dir: null
+
+#: A MEDS labels directory. Only (subject_id, prediction_time) are read — never boolean_value.
+external_labels_dir: ???
+
 output_predictions_dir: ${predictions_dir}
 
 #: Mutually exclusive prediction sources.

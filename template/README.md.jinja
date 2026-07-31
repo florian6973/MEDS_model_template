@@ -14,19 +14,18 @@ uv sync --all-extras
 
 ## The command graph
 
-Six commands form a DAG, not a fixed pipeline. Run `meds-model commands` to see which this model supports.
+Five commands form a DAG, not a fixed pipeline. Run `meds-model commands` to see which this model supports.
 
 | Command | Reads | Writes |
 |---|---|---|
 | `preprocess_data` | an external MEDS dataset | `<data_dir>/patients/` |
-| `preprocess_task` | a task file (ACES YAML or labels) | `<data_dir>/tasks/<name>/` |
 | `pretrain` | patient data | a pretrained model directory |
-| `infer` | patient data + a pretrained model | `<data_dir>/inference/<name>/` |
-| `supervised_train` | patient data + a task (+ at most one prior artifact) | a supervised model directory |
-| `predict` | patient data + a task + exactly one source | `predictions.parquet` |
+| `infer` | patient data + a pretrained model + `external_labels_dir` | `<data_dir>/inference/<name>/` |
+| `supervised_train` | patient data + `external_labels_dir` (+ at most one prior artifact) | a supervised model directory |
+| `predict` | `external_labels_dir` + exactly one source | `predictions.parquet` |
 
-`data_dir` is a shared workspace: `patients/` is written once and never modified, while `preprocess_task`
-and `infer` append sibling subdirectories. Every artifact directory carries a `manifest.yaml` recording
+`data_dir` is a shared workspace: `patients/` is written once and never modified, and `infer` appends a
+sibling subdirectory. Every artifact directory carries a `manifest.yaml` recording
 what produced it and from which inputs, and is published atomically — so a directory that exists is a
 directory that finished.
 
@@ -34,41 +33,34 @@ directory that finished.
 
 ```bash
 {% if profile == 'supervised' %}meds-model preprocess_data  external_meds_dir=$MEDS_ROOT output_data_dir=runs/data
-meds-model preprocess_task  input_data_dir=runs/data external_task_file=$TASK
-meds-model supervised_train input_data_dir=runs/data output_supervised_model_dir=runs/models/supervised
-meds-model predict          input_data_dir=runs/data input_supervised_model_dir=runs/models/supervised \
+meds-model supervised_train input_data_dir=runs/data external_labels_dir=$LABELS_DIR output_supervised_model_dir=runs/models/supervised
+meds-model predict          input_data_dir=runs/data external_labels_dir=$LABELS_DIR input_supervised_model_dir=runs/models/supervised \
                             output_predictions_dir=runs/predictions
 {% elif profile == 'finetune' %}meds-model preprocess_data  external_meds_dir=$MEDS_ROOT output_data_dir=runs/data
 meds-model pretrain         input_data_dir=runs/data output_pretrained_model_dir=runs/models/pretrained
-meds-model preprocess_task  input_data_dir=runs/data external_task_file=$TASK
-meds-model supervised_train input_data_dir=runs/data input_pretrained_model_dir=runs/models/pretrained \
+meds-model supervised_train input_data_dir=runs/data external_labels_dir=$LABELS_DIR input_pretrained_model_dir=runs/models/pretrained \
                             output_supervised_model_dir=runs/models/supervised
-meds-model predict          input_data_dir=runs/data input_supervised_model_dir=runs/models/supervised \
+meds-model predict          input_data_dir=runs/data external_labels_dir=$LABELS_DIR input_supervised_model_dir=runs/models/supervised \
                             output_predictions_dir=runs/predictions
 {% elif profile == 'probe' %}meds-model preprocess_data  external_meds_dir=$MEDS_ROOT output_data_dir=runs/data
 meds-model pretrain         input_data_dir=runs/data output_pretrained_model_dir=runs/models/pretrained
-meds-model preprocess_task  input_data_dir=runs/data external_task_file=$TASK
-meds-model infer            input_data_dir=runs/data input_pretrained_model_dir=runs/models/pretrained
-meds-model supervised_train input_data_dir=runs/data input_inference_subdir=inference/embeddings \
+meds-model infer            input_data_dir=runs/data external_labels_dir=$LABELS_DIR input_pretrained_model_dir=runs/models/pretrained
+meds-model supervised_train input_data_dir=runs/data external_labels_dir=$LABELS_DIR input_inference_subdir=inference/embeddings \
                             output_supervised_model_dir=runs/models/supervised
-meds-model predict          input_data_dir=runs/data input_supervised_model_dir=runs/models/supervised \
+meds-model predict          input_data_dir=runs/data external_labels_dir=$LABELS_DIR input_supervised_model_dir=runs/models/supervised \
                             output_predictions_dir=runs/predictions
 {% elif profile == 'zero_shot_direct' %}meds-model preprocess_data external_meds_dir=$MEDS_ROOT output_data_dir=runs/data
 meds-model pretrain        input_data_dir=runs/data output_pretrained_model_dir=runs/models/pretrained
-meds-model preprocess_task input_data_dir=runs/data external_task_file=$ACES_YAML
-meds-model predict         input_data_dir=runs/data input_pretrained_model_dir=runs/models/pretrained \
+meds-model predict         input_data_dir=runs/data external_labels_dir=$LABELS_DIR input_pretrained_model_dir=runs/models/pretrained \
                            output_predictions_dir=runs/predictions
 {% elif profile == 'zero_shot_materialized' %}meds-model preprocess_data external_meds_dir=$MEDS_ROOT output_data_dir=runs/data
 meds-model pretrain        input_data_dir=runs/data output_pretrained_model_dir=runs/models/pretrained
-meds-model preprocess_task input_data_dir=runs/data external_task_file=$ACES_YAML
-meds-model infer           input_data_dir=runs/data input_pretrained_model_dir=runs/models/pretrained
-meds-model predict         input_data_dir=runs/data input_inference_subdir=inference/embeddings \
+meds-model infer           input_data_dir=runs/data external_labels_dir=$LABELS_DIR input_pretrained_model_dir=runs/models/pretrained
+meds-model predict         input_data_dir=runs/data external_labels_dir=$LABELS_DIR input_inference_subdir=inference/embeddings \
                            output_predictions_dir=runs/predictions
 {% elif profile == 'packaged' %}meds-model preprocess_data external_meds_dir=$MEDS_ROOT output_data_dir=runs/data
-meds-model preprocess_task input_data_dir=runs/data external_task_file=$TASK
-meds-model predict         input_data_dir=runs/data output_predictions_dir=runs/predictions
+meds-model predict         input_data_dir=runs/data external_labels_dir=$LABELS_DIR output_predictions_dir=runs/predictions
 {% else %}meds-model preprocess_data external_meds_dir=$MEDS_ROOT output_data_dir=runs/data
-meds-model preprocess_task input_data_dir=runs/data external_task_file=$TASK
 # ... then the commands listed by `meds-model commands`
 {% endif %}```
 

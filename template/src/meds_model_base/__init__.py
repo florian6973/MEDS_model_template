@@ -7,7 +7,7 @@ users should not edit it (edit ``src/<your_model>/`` instead).
 Public surface:
 
 - :mod:`meds_model_base.commands` — ``CommandName``, the ``MEDSModelCommand`` ABCs, source arbitration,
-  and the default implementations of the six commands.
+  and the default implementations of the five commands.
 - :mod:`meds_model_base.manifest` — artifact manifests: atomic publication, provenance, input validation.
 - :mod:`meds_model_base.schemas` — canonical + template schemas and validators.
 - :mod:`meds_model_base.tasks` — turning an external task file into split label parquets.

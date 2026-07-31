@@ -16,7 +16,10 @@ defaults:
   - profile: default
 
 input_data_dir: ${data_dir}
-input_task_subdir: ${tasks.default}
+
+#: A MEDS labels directory, as produced by `meds-dev-task` or any ACES run.
+external_labels_dir: ???
+
 output_supervised_model_dir: ${models.supervised}
 
 #: Optional, mutually exclusive sources.

@@ -15,8 +15,6 @@ models:
 predictions_dir: ${run_dir}/predictions
 
 #: Components *inside* data_dir. Always relative to it — that is what distinguishes a subdir from a dir.
-tasks:
-  default: tasks/task
 inference:
   embeddings: inference/embeddings
 

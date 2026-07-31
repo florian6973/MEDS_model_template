@@ -1,12 +1,15 @@
 """How this model answers a task. **This file is a stub — nothing here is implemented.**
 {% if profile == 'zero_shot_direct' %}
-``PredictCommand`` leaves ``resolve`` abstract on purpose: turning a task definition into probabilities
-over a model's *own* outputs is model-specific, and a default returning a constant would produce a
-schema-valid predictions file of pure noise that every downstream check would pass.
+``PredictCommand`` leaves ``resolve`` abstract on purpose: turning a task into probabilities over a
+model's *own* outputs is model-specific, and a default returning a constant would produce a schema-valid
+predictions file of pure noise that every downstream check would pass.
 
-The task *definition* is recovered from the task artifact's manifest — ``predict`` takes no separate task
-argument, so it cannot be handed a definition that disagrees with the materialized labels. Use
-``task_definition_path(task_dir)`` to reach it and ``load_task_config`` to parse it.
+**The template tells you *where* to predict, not *what*.** ``index`` carries the timepoints, taken from
+``external_labels_dir`` with the labels stripped — that is all a MEDS labels directory contains, and all
+MEDS-DEV ever passes a model. How this model knows *which* task it is answering is its own business: ship a
+mapping alongside the weights, embed it in the checkpoint, or accept an extra Hydra override. The template
+deliberately takes no position, because anything it chose would be wrong under MEDS-DEV, which passes no
+task definition and has no task-name placeholder.
 {% else %}
 This profile ships its own weights, so ``predict`` is the only command that runs. Arbitration lets it run
 with no input artifact solely because ``packaged_model`` is set below; the identifier is recorded in the

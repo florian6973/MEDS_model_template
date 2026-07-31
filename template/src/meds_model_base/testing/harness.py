@@ -49,11 +49,12 @@ def supported_sources(commands: Mapping[CommandName, type[MEDSModelCommand]], na
     return cls.supported_sources if cls.supported_sources is not None else frozenset(cls.sources)
 
 
-def build_workspace(meds_root: Path, task_file: Path, workspace: Path) -> Path:
-    """Run the two preprocessing commands; return the shared ``data_dir``.
+def build_workspace(meds_root: Path, workspace: Path) -> Path:
+    """Run ``preprocess_data``; return the shared ``data_dir``.
 
     No model is involved, so this half of the contract is exercisable from the moment a repository is
-    generated — before its ``model.py`` stub is implemented.
+    generated — before its ``model.py`` stub is implemented. Labels are not preprocessed: each command
+    materializes them from ``external_labels_dir`` itself.
     """
     run_cli(
         [
@@ -64,20 +65,13 @@ def build_workspace(meds_root: Path, task_file: Path, workspace: Path) -> Path:
             "do_overwrite=true",
         ]
     )
-    run_cli(
-        [
-            "preprocess_task",
-            f"input_data_dir={workspace}",
-            f"external_task_file={task_file}",
-            "do_overwrite=true",
-        ]
-    )
     return workspace
 
 
 def run_chain(
     commands: Mapping[CommandName, type[MEDSModelCommand]],
     data_dir: Path,
+    labels_dir: Path,
     out_dir: Path,
     *,
     epochs: int = 2,
@@ -120,6 +114,7 @@ def run_chain(
                 f"input_data_dir={data_dir}",
                 f"input_pretrained_model_dir={artifacts['pretrained']}",
                 f"output_inference_subdir={INFERENCE_SUBDIR}",
+                f"external_labels_dir={labels_dir}",
                 f"batch_size={batch_size}",
                 "do_overwrite=true",
             ]
@@ -131,6 +126,7 @@ def run_chain(
         args = [
             "supervised_train",
             f"input_data_dir={data_dir}",
+            f"external_labels_dir={labels_dir}",
             f"output_supervised_model_dir={supervised}",
             *train,
         ]
@@ -144,7 +140,7 @@ def run_chain(
 
     if CommandName.predict in commands:
         predictions = out_dir / "predictions"
-        args = ["predict", f"input_data_dir={data_dir}"]
+        args = ["predict", f"input_data_dir={data_dir}", f"external_labels_dir={labels_dir}"]
         sources = supported_sources(commands, CommandName.predict)
         if "input_supervised_model_dir" in sources:
             args.append(f"input_supervised_model_dir={artifacts['supervised']}")

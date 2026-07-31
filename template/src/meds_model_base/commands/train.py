@@ -3,10 +3,10 @@
 Both share one Lightning flow: build the datamodule, build the ``LightningModule``, fit, then publish the
 result atomically as a model artifact. They differ in what data they see and what they may start from:
 
-- ``pretrain`` sees patient data only. There is no ``input_task_subdir`` in the shared interface; a model
-  that needs targets (EveryQuery's queries, MOTOR's time-to-event bins) derives them internally.
-- ``supervised_train`` sees a task, and may start from **at most one** prior artifact — a pretrained model
-  to fine-tune, or inference artifacts to probe. Which one is decided by
+- ``pretrain`` sees patient data only. There is no task argument in the shared interface; a model that
+  needs targets (query objectives, time-to-event bins) derives them internally.
+- ``supervised_train`` takes ``external_labels_dir`` and may start from **at most one** prior artifact —
+  a pretrained model to fine-tune, or inference artifacts to probe. Which one is decided by
   :meth:`~meds_model_base.commands.base.MEDSModelCommand.validate` before any work happens.
 
 **In-progress state lives in a work directory**, not in the artifact. A crashed run therefore leaves no
@@ -26,9 +26,11 @@ import shutil
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar
 
-from ..manifest import ArtifactType, InferenceKind, input_ref, read_manifest, write_artifact
+from ..manifest import ArtifactType, InferenceKind, dir_digest, input_ref, read_manifest, write_artifact
+from ..tasks import materialize_labels
 from ..utils import BEST_CKPT_FILENAME, prepare_work_dir, require_checkpoint, resolve_subdir
 from .base import PretrainCommand, SupervisedTrainCommand
+from .preprocess_data import PATIENTS_SUBDIR
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     import lightning.pytorch as pl
@@ -57,6 +59,7 @@ class _TrainFlow:
             seed_everything(cfg.seed, workers=True)
         torch.set_float32_matmul_precision("medium")
 
+        label_extras = self.prepare_labels(cfg, work_dir)
         datamodule = build_datamodule(cfg)
         model, model_extras = self.build_and_prepare(cfg, datamodule, source)
 
@@ -79,11 +82,16 @@ class _TrainFlow:
                 "global_step": int(trainer.global_step),
             }
             extras.update(model_extras)
+            extras.update(label_extras)
 
         if bool(cfg.get("clean_work_dir", True)):
             shutil.rmtree(work_dir, ignore_errors=True)
         logger.info("Training complete; artifact at %s.", output_dir)
         return output_dir
+
+    def prepare_labels(self, cfg: DictConfig, work_dir: Path) -> dict:
+        """Materialize ``external_labels_dir`` for the datamodule; return manifest fields. No-op untasked."""
+        return {}
 
     def build_and_prepare(
         self, cfg: DictConfig, datamodule: pl.LightningDataModule, source: tuple[str | None, Any]
@@ -92,8 +100,17 @@ class _TrainFlow:
         raise NotImplementedError
 
     def input_refs(self, cfg: DictConfig, source: tuple[str | None, Any]) -> list:
-        """The ``inputs`` block for the output manifest."""
+        """The ``inputs`` block for the output manifest.
+
+        ``input_data_dir`` is recorded as the workspace *root*, which is the role ``predict`` looks up when
+        it has to recover a workspace it was not told about.
+        """
         refs = [input_ref("input_data_dir", Path(cfg.input_data_dir))]
+        if cfg.get("external_labels_dir"):
+            labels = {"role": "external_labels_dir", "path": str(cfg.external_labels_dir)}
+            if (digest := dir_digest(cfg.external_labels_dir)) is not None:
+                labels["digest"] = digest
+            refs.append(labels)
         role, value = source
         if role is not None:
             path = resolve_subdir(cfg.input_data_dir, value) if role.endswith("_subdir") else Path(value)
@@ -116,7 +133,25 @@ class DefaultPretrainCommand(_TrainFlow, PretrainCommand):
         return self.build_module(cfg, datamodule), {}
 
 
-class DefaultSupervisedTrainCommand(_TrainFlow, SupervisedTrainCommand):
+class _TaskLabelsMixin:
+    """Materialize ``external_labels_dir`` into the run's work directory before the datamodule is built.
+
+    meds-torch-data needs ``{split}.parquet`` on disk; that layout is a per-run implementation detail, not
+    a shared artifact, so it lives in the work directory and disappears with it. Doing this inline is what
+    removed the old ``preprocess_task`` command: the labels MEDS-DEV hands over are already the artifact.
+    """
+
+    def prepare_labels(self, cfg: DictConfig, work_dir: Path) -> dict:
+        labels_dir, summary = materialize_labels(
+            cfg.external_labels_dir, Path(cfg.input_data_dir) / PATIENTS_SUBDIR, work_dir / "labels"
+        )
+        # The datamodule reads the split layout off disk, so point it at what we just wrote. The config
+        # cannot express this path: the work directory is derived at runtime from the output directory.
+        cfg.datamodule.config.task_labels_dir = str(labels_dir)
+        return {"labels": summary}
+
+
+class DefaultSupervisedTrainCommand(_TaskLabelsMixin, _TrainFlow, SupervisedTrainCommand):
     """Supervised training: from scratch, or fine-tuned from a pretrained model.
 
     Probing inference artifacts is a genuinely different training problem (dense feature vectors rather
@@ -183,9 +218,10 @@ class ProbeTrainCommand(_TrainFlow, SupervisedTrainCommand):
             seed_everything(cfg.seed, workers=True)
         torch.set_float32_matmul_precision("medium")
 
-        frames, feature_column, coverage = load_probe_frames(
-            inference_dir, resolve_subdir(cfg.input_data_dir, cfg.input_task_subdir)
+        labels_dir, label_summary = materialize_labels(
+            cfg.external_labels_dir, Path(cfg.input_data_dir) / PATIENTS_SUBDIR, work_dir / "labels"
         )
+        frames, feature_column, coverage = load_probe_frames(inference_dir, labels_dir)
         loaders, input_dim = build_probe_dataloaders(frames, feature_column, cfg)
         # Built from `cfg.model` like every other trainable module, so the probe head is yours to change.
         model = instantiate(cfg.model, input_dim=input_dim)
@@ -208,6 +244,7 @@ class ProbeTrainCommand(_TrainFlow, SupervisedTrainCommand):
                 "epochs": int(trainer.current_epoch),
                 "global_step": int(trainer.global_step),
             }
+            extras["labels"] = label_summary
             extras["initialization"] = {
                 "from": "inference_artifacts",
                 "path": str(inference_dir),

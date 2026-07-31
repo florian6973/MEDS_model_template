@@ -9,20 +9,24 @@ caller makes. It is *recorded* in the manifest — along with the column schema 
 validate against it. That is what turns this command's output from a dead-end artifact into something a
 probe or a materialized zero-shot ``predict`` can safely consume.
 
-The model declares its own kind via ``LightningModule.inference_kind``; the default is ``embeddings``, the
-kind the reference profiles emit from ``predict_step``.
+The model declares its own kind via ``LightningModule.inference_kind``; the default is ``embeddings``.
+
+``external_labels_dir`` fixes the timepoints. Its split layout is materialized into a temporary
+directory and discarded — only the inference artifact is published.
 """
 
 from __future__ import annotations
 
 import logging
+import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar
 
 import polars as pl
 
-from ..manifest import ArtifactType, InferenceKind, input_ref, read_manifest, write_artifact
+from ..manifest import ArtifactType, InferenceKind, dir_digest, input_ref, read_manifest, write_artifact
 from ..schemas import TaskAgnosticOutputSchema
+from ..tasks import materialize_labels
 from ..utils import resolve_subdir
 from ._runtime import KEYS, load_index, load_trained_module, resolve_splits, run_predict_step, stack_outputs
 from .base import InferCommand
@@ -55,19 +59,21 @@ class DefaultInferCommand(InferCommand):
         read_manifest(model_dir, require_type=ArtifactType.pretrained_model)
         module = load_trained_module(model_dir)
 
-        task_dir = resolve_subdir(data_dir, cfg.get("input_task_subdir"))
-        if task_dir is None:
+        if not cfg.get("external_labels_dir"):
             raise ValueError(
-                "input_task_subdir is required by this implementation: it fixes the timepoints to infer at. "
-                "Materialize a task with `preprocess_task` first, or override `run` to derive an index "
-                "some other way."
+                "external_labels_dir is required by this implementation: it fixes the timepoints to infer "
+                "at. Pass a MEDS labels directory, or override `run` to derive an index some other way."
             )
-        read_manifest(task_dir, require_type=ArtifactType.task)
-
-        splits = resolve_splits(cfg)
-        index = load_index(task_dir, splits)
-        frame = self.infer(cfg, module, index)
-
+        # Materialized beside the artifact being built, then discarded: the split layout is what the
+        # datamodule reads, not something worth publishing.
+        with tempfile.TemporaryDirectory(prefix=".labels.", dir=data_dir) as tmp:
+            labels_dir, label_summary = materialize_labels(
+                cfg.external_labels_dir, data_dir / PATIENTS_SUBDIR, Path(tmp) / "labels"
+            )
+            cfg.datamodule.config.task_labels_dir = str(labels_dir)
+            splits = resolve_splits(cfg)
+            index = load_index(labels_dir, splits)
+            frame = self.infer(cfg, module, index)
         dest = resolve_subdir(data_dir, cfg.output_inference_subdir)
         kind = str(getattr(module, "inference_kind", self.default_kind))
         with write_artifact(
@@ -77,9 +83,9 @@ class DefaultInferCommand(InferCommand):
             name=Path(cfg.output_inference_subdir).name,
             kind=kind,
             inputs=[
-                input_ref("input_data_dir", data_dir / PATIENTS_SUBDIR),
+                input_ref("input_data_dir", data_dir),
                 input_ref("input_pretrained_model_dir", model_dir),
-                input_ref("input_task_subdir", task_dir),
+                _labels_ref(cfg.external_labels_dir),
             ],
             config=cfg,
             do_overwrite=bool(cfg.get("do_overwrite", False)),
@@ -87,6 +93,7 @@ class DefaultInferCommand(InferCommand):
             table = TaskAgnosticOutputSchema.align(frame.to_arrow())
             pl.from_arrow(table).write_parquet(staging / ARTIFACTS_FILENAME)
             extras["columns"] = _column_schema(frame)
+            extras["labels"] = label_summary
             extras["n_rows"] = len(frame)
             extras["splits"] = sorted(index["split"].unique().to_list())
 
@@ -104,10 +111,18 @@ class DefaultInferCommand(InferCommand):
             frames.append(keys.with_columns(stack_outputs(outputs)))
         if not frames:
             raise RuntimeError(
-                "The datamodule produced no rows for any requested split. Check that input_task_subdir "
+                "The datamodule produced no rows for any requested split. Check that external_labels_dir "
                 "and the tensorized cohort refer to the same subjects."
             )
         return pl.concat(frames, how="vertical_relaxed").unique(subset=KEYS, maintain_order=True)
+
+
+def _labels_ref(labels_dir) -> dict:
+    """An ``inputs`` entry for a plain labels directory: no manifest of its own, so digest the contents."""
+    ref: dict = {"role": "external_labels_dir", "path": str(labels_dir)}
+    if (digest := dir_digest(labels_dir)) is not None:
+        ref["digest"] = digest
+    return ref
 
 
 def _InferStepAdapter(module: pl_light.LightningModule) -> pl_light.LightningModule:  # noqa: N802

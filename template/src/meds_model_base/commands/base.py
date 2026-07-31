@@ -1,6 +1,6 @@
 """The command contract: ``CommandName``, the ``MEDSModelCommand`` ABC hierarchy, and source arbitration.
 
-Six commands form a DAG, not a fixed pipeline. Each is a config-driven, disk-in / disk-out unit with a
+Five commands form a DAG, not a fixed pipeline. Each is a config-driven, disk-in / disk-out unit with a
 single public entry point, :meth:`MEDSModelCommand.__call__`, which validates its arguments and then
 delegates to :meth:`~MEDSModelCommand.run`.
 
@@ -35,7 +35,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 
 
 class CommandName(StrEnum):
-    """The six standard commands, in rough dependency order.
+    """The five standard commands, in rough dependency order.
 
     Examples:
         >>> CommandName.predict
@@ -43,11 +43,10 @@ class CommandName(StrEnum):
         >>> CommandName("pretrain") is CommandName.pretrain
         True
         >>> [c.value for c in CommandName]
-        ['preprocess_data', 'preprocess_task', 'pretrain', 'infer', 'supervised_train', 'predict']
+        ['preprocess_data', 'pretrain', 'infer', 'supervised_train', 'predict']
     """
 
     preprocess_data = "preprocess_data"
-    preprocess_task = "preprocess_task"
     pretrain = "pretrain"
     infer = "infer"
     supervised_train = "supervised_train"
@@ -237,32 +236,18 @@ class PreprocessDataCommand(MEDSModelCommand):
     - **input**  ``cfg.external_meds_dir`` — canonical MEDS with existing subject splits.
     - **output** ``cfg.output_data_dir/patients/`` plus its manifest. Creates the ``data_dir`` workspace.
 
-    ``patients/`` is immutable afterwards; ``preprocess_task`` and ``infer`` only append sibling
-    subdirectories.
+    ``patients/`` is immutable afterwards; only ``infer`` appends a sibling subdirectory. The subject
+    split table is copied in here too, so later commands never need the raw dataset again.
     """
 
     name: ClassVar[CommandName] = CommandName.preprocess_data
     config_name: ClassVar[str] = "preprocess_data"
 
 
-class PreprocessTaskCommand(MEDSModelCommand):
-    """Materialize or validate a task against already-preprocessed patient data.
-
-    - **input**  ``cfg.input_data_dir`` (read-only apart from the appended subdirectory) and
-      ``cfg.external_task_file`` — either an ACES task YAML or an already-materialized label parquet.
-    - **output** ``cfg.input_data_dir/<cfg.output_task_subdir>/{train,tuning,held_out}.parquet``.
-
-    Must not copy or rewrite ``patients/``.
-    """
-
-    name: ClassVar[CommandName] = CommandName.preprocess_task
-    config_name: ClassVar[str] = "preprocess_task"
-
-
 class PretrainCommand(MEDSModelCommand):
     """Train a foundation model from patient data.
 
-    - **input**  ``cfg.input_data_dir`` (no task; the global interface has no ``input_task_subdir`` here).
+    - **input**  ``cfg.input_data_dir`` only; the interface passes no task to pretraining.
     - **output** ``cfg.output_pretrained_model_dir``.
 
     Model-specific target construction — EveryQuery's query generation, MOTOR's time-to-event bins — happens
@@ -281,8 +266,8 @@ class PretrainCommand(MEDSModelCommand):
 class InferCommand(MEDSModelCommand):
     """Materialize reusable outputs from a pretrained model.
 
-    - **input**  ``cfg.input_data_dir`` + ``cfg.input_pretrained_model_dir``, optionally
-      ``cfg.input_task_subdir`` to fix the timepoints.
+    - **input**  ``cfg.input_data_dir`` + ``cfg.input_pretrained_model_dir`` +
+      ``cfg.external_labels_dir``, which fixes the timepoints to infer at.
     - **output** ``cfg.input_data_dir/<cfg.output_inference_subdir>/artifacts.parquet``.
 
     What is produced is model-defined — embeddings, generated trajectories, hazards, native scores — so
@@ -297,7 +282,7 @@ class InferCommand(MEDSModelCommand):
 class SupervisedTrainCommand(MEDSModelCommand):
     """Train a supervised model, from scratch or on top of one prior artifact.
 
-    - **input**  ``cfg.input_data_dir`` + ``cfg.input_task_subdir``, plus at most one of
+    - **input**  ``cfg.input_data_dir`` + ``cfg.external_labels_dir``, plus at most one of
       ``cfg.input_pretrained_model_dir`` (fine-tune) or ``cfg.input_inference_subdir`` (probe).
     - **output** ``cfg.output_supervised_model_dir``.
     """
@@ -322,9 +307,11 @@ class SupervisedTrainCommand(MEDSModelCommand):
 class PredictCommand(MEDSModelCommand):
     """Produce standardized predictions for a task.
 
-    - **input**  ``cfg.input_data_dir`` + ``cfg.input_task_subdir``, plus exactly one of
-      ``cfg.input_supervised_model_dir``, ``cfg.input_pretrained_model_dir`` or
-      ``cfg.input_inference_subdir`` — unless the implementation declares a ``packaged_model``.
+    - **input**  ``cfg.external_labels_dir`` plus exactly one of ``cfg.input_supervised_model_dir``,
+      ``cfg.input_pretrained_model_dir`` or ``cfg.input_inference_subdir`` — unless the implementation
+      declares a ``packaged_model``. ``cfg.input_data_dir`` is optional: when omitted it is recovered from
+      the source artifact's manifest, which is what lets MEDS-DEV's rolling ``model_initialization_dir``
+      point at a training output whose workspace lives elsewhere.
     - **output** ``cfg.output_predictions_dir/predictions.parquet``
       (``meds_evaluation.PredictionSchema``).
 
@@ -333,8 +320,8 @@ class PredictCommand(MEDSModelCommand):
     rows turns a partial run into a plausible-looking complete one. ``run`` enforces this and records
     ``n_expected`` / ``n_written`` per split in the manifest.
 
-    This command never reads ground truth. The task's ``boolean_value`` column is dropped on load; scoring
-    is a separate, shared tool.
+    This command never reads ground truth. ``boolean_value`` is dropped when the index is loaded from
+    ``external_labels_dir``; scoring is a separate, shared tool.
     """
 
     name: ClassVar[CommandName] = CommandName.predict

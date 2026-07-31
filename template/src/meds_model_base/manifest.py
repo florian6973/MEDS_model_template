@@ -11,8 +11,12 @@ Two conventions make that safe:
   into place, so a visible artifact directory is always complete. There is no window in which a reader can
   observe a half-written artifact, and no partial directory to clean up after a crash.
 - **No aggregate manifest.** Each artifact describes only itself. The state of a ``data_dir`` is derived by
-  scanning ``tasks/*/manifest.yaml`` and ``inference/*/manifest.yaml``. A root manifest would have to be
-  rewritten on every append, which races as soon as two jobs materialize different tasks concurrently.
+  scanning ``inference/*/manifest.yaml``. A root manifest would have to be rewritten on every append, which
+  races as soon as two jobs write different inference artifacts concurrently.
+
+Manifests are also how a command *finds* things. ``predict`` recovers the workspace its model was trained
+on via :func:`recover_input`, which is what lets MEDS-DEV — whose ``model_initialization_dir`` rolls
+forward to the most recent training output — point at a directory whose workspace lives elsewhere.
 
 Dependency-light: yaml + stdlib only, so the introspection paths stay cheap.
 """
@@ -57,14 +61,13 @@ class ArtifactType(StrEnum):
     """The kinds of artifact directory the command graph produces.
 
     Examples:
-        >>> ArtifactType("task") is ArtifactType.task
+        >>> ArtifactType("inference") is ArtifactType.inference
         True
         >>> [a.value for a in ArtifactType]
-        ['data', 'task', 'inference', 'pretrained_model', 'supervised_model', 'predictions']
+        ['data', 'inference', 'pretrained_model', 'supervised_model', 'predictions']
     """
 
     data = "data"
-    task = "task"
     inference = "inference"
     pretrained_model = "pretrained_model"
     supervised_model = "supervised_model"
@@ -202,6 +205,39 @@ def manifest_digest(artifact_dir: Path) -> str | None:
     """Digest of ``artifact_dir/manifest.yaml``, or None when the artifact has no manifest."""
     fp = Path(artifact_dir) / MANIFEST_FILENAME
     return file_digest(fp) if fp.is_file() else None
+
+
+def dir_digest(path: Path | str, pattern: str = "*.parquet") -> str | None:
+    """Order-independent digest over the files in a directory, or None if there are none.
+
+    Used for inputs that are plain data rather than published artifacts — an ``external_labels_dir`` has no
+    manifest of its own, but recording a digest still lets a later run detect that ``predict`` scored a
+    different label set than ``supervised_train`` fitted.
+    """
+    files = sorted(Path(path).rglob(pattern)) if Path(path).is_dir() else [Path(path)]
+    files = [fp for fp in files if fp.is_file()]
+    if not files:
+        return None
+    h = hashlib.sha256()
+    for fp in files:
+        h.update(file_digest(fp).encode())
+    return f"sha256:{h.hexdigest()}"
+
+
+def recover_input(artifact_dir: Path | str, role: str) -> Path | None:
+    """Read the path recorded under ``role`` in an artifact's ``inputs`` block.
+
+    This is how a command inherits context it was not given directly — most importantly, how ``predict``
+    learns which workspace its model was trained on.
+    """
+    try:
+        manifest = read_manifest(artifact_dir)
+    except ManifestError:
+        return None
+    for ref in manifest.get("inputs") or []:
+        if ref.get("role") == role and ref.get("path"):
+            return Path(ref["path"])
+    return None
 
 
 def input_ref(role: str, path: Path | str | None) -> dict[str, Any] | None:

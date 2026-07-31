@@ -143,7 +143,7 @@ def probe_predict_frame(
     if len(missing):
         raise ValueError(
             f"{len(missing)} of {len(index)} index rows have no embedding in {inference_dir}. Re-run `infer` "
-            "with input_task_subdir pointing at this task so every prediction timepoint is covered."
+            "with the same external_labels_dir so every prediction timepoint is covered."
         )
 
     x = torch.tensor(joined[feature_column].to_list(), dtype=torch.float32)

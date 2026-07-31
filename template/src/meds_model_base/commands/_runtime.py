@@ -61,8 +61,40 @@ def load_trained_module(model_dir: Path | str) -> pl_light.LightningModule:
     return module
 
 
+def resolve_workspace(cfg: DictConfig, source_path: Path | str | None) -> Path:
+    """Determine the ``data_dir`` to run against, preferring an explicit argument.
+
+    When ``input_data_dir`` is not given, it is recovered from the source artifact's manifest. That is what
+    makes ``predict`` usable under MEDS-DEV, where ``model_initialization_dir`` rolls forward to the most
+    recent *training* output while the tensorized workspace may live under an earlier one — the training
+    artifact recorded which workspace it used, so nothing has to be re-derived or re-tensorized.
+    """
+    from ..manifest import recover_input
+
+    if cfg.get("input_data_dir"):
+        return Path(cfg.input_data_dir)
+    if source_path is None:
+        raise ValueError(
+            "input_data_dir was not given and there is no source artifact to recover it from. A model that "
+            "ships its own weights must be told where the preprocessed data is."
+        )
+    recovered = recover_input(source_path, "input_data_dir")
+    if recovered is None:
+        raise ValueError(
+            f"input_data_dir was not given, and {source_path} does not record one in its manifest. Pass "
+            "input_data_dir=... explicitly."
+        )
+    if not recovered.is_dir():
+        raise FileNotFoundError(
+            f"{source_path} was built against {recovered}, which no longer exists. Pass input_data_dir=... "
+            "to point at the workspace's current location."
+        )
+    logger.info("Recovered input_data_dir=%s from %s.", recovered, source_path)
+    return recovered
+
+
 def load_index(task_dir: Path | str, splits: list[str] | None = None) -> pl.DataFrame:
-    """Load the timepoints to score from a materialized task, **dropping any ground-truth labels**.
+    """Load the timepoints to score from materialized labels, **dropping any ground-truth labels**.
 
     This command graph never reads ground truth at inference time: it needs only *where* to predict.
     ``boolean_value`` is discarded here so that no downstream code can accidentally consume it.
@@ -75,7 +107,10 @@ def load_index(task_dir: Path | str, splits: list[str] | None = None) -> pl.Data
     for split in wanted:
         fp = task_dir / f"{split}.parquet"
         if not fp.is_file():
-            raise FileNotFoundError(f"Task {task_dir} has no {split}.parquet (requested splits: {wanted}).")
+            raise FileNotFoundError(
+                f"No {split}.parquet under {task_dir} (requested splits: {wanted}). The labels supplied "
+                "as external_labels_dir contain no rows for that split."
+            )
         frames.append(pl.read_parquet(fp).select(KEYS).with_columns(pl.lit(split).alias("split")))
     if not frames:
         raise FileNotFoundError(f"No split parquets found in {task_dir}.")
@@ -148,6 +183,7 @@ __all__ = [
     "KEYS",
     "SPLIT_ATTRS",
     "load_index",
+    "resolve_workspace",
     "load_trained_module",
     "resolve_splits",
     "run_predict_step",

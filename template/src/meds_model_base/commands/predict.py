@@ -20,16 +20,26 @@ where the two failure modes that produce plausible-but-wrong results are caught:
 from __future__ import annotations
 
 import logging
+import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar
 
 import polars as pl
 import pyarrow.parquet as pq
 
-from ..manifest import ArtifactType, InferenceKind, input_ref, read_manifest, write_artifact
+from ..manifest import ArtifactType, InferenceKind, dir_digest, input_ref, read_manifest, write_artifact
 from ..schemas import validate_predictions
+from ..tasks import materialize_labels
 from ..utils import resolve_subdir
-from ._runtime import KEYS, load_index, load_trained_module, resolve_splits, run_predict_step, stack_outputs
+from ._runtime import (
+    KEYS,
+    load_index,
+    load_trained_module,
+    resolve_splits,
+    resolve_workspace,
+    run_predict_step,
+    stack_outputs,
+)
 from .base import PredictCommand
 from .preprocess_data import PATIENTS_SUBDIR
 
@@ -58,20 +68,27 @@ class _PredictRunMixin:
     """The fixed ``run`` contract shared by every prediction implementation."""
 
     def run(self, cfg: DictConfig) -> Path:
-        data_dir = Path(cfg.input_data_dir)
-        read_manifest(data_dir / PATIENTS_SUBDIR, require_type=ArtifactType.data)
-
-        task_dir = resolve_subdir(data_dir, cfg.input_task_subdir)
-        read_manifest(task_dir, require_type=ArtifactType.task)
-
         role, value = self.source
-        source_path = self._validate_source(cfg, role, value)
+        # Arbitrate and validate the source first: it is also where an omitted workspace is recovered from.
+        source_path = self._validate_source(cfg, role, value, data_dir=cfg.get("input_data_dir"))
+        data_dir = resolve_workspace(cfg, source_path)
+        cfg.input_data_dir = str(data_dir)
+        read_manifest(data_dir / PATIENTS_SUBDIR, require_type=ArtifactType.data)
+        if role is not None and str(role).endswith("_subdir"):
+            source_path = resolve_subdir(data_dir, value)
 
-        splits = resolve_splits(cfg)
-        index = load_index(task_dir, splits)
-        logger.info("Predicting %d timepoints across %d split(s).", len(index), index["split"].n_unique())
+        with tempfile.TemporaryDirectory(prefix=".labels.", dir=data_dir) as tmp:
+            labels_dir, label_summary = materialize_labels(
+                cfg.external_labels_dir, data_dir / PATIENTS_SUBDIR, Path(tmp) / "labels"
+            )
+            cfg.datamodule.config.task_labels_dir = str(labels_dir)
+            splits = resolve_splits(cfg)
+            index = load_index(labels_dir, splits)
+            logger.info(
+                "Predicting %d timepoints across %d split(s).", len(index), index["split"].n_unique()
+            )
+            predictions = self.predict(cfg, (role, value), index)
 
-        predictions = self.predict(cfg, (role, value), index)
         coverage = _check_coverage(index, predictions)
 
         output_dir = Path(cfg.output_predictions_dir)
@@ -80,8 +97,8 @@ class _PredictRunMixin:
             artifact_type=ArtifactType.predictions,
             command=self.name.value,
             inputs=[
-                input_ref("input_data_dir", data_dir / PATIENTS_SUBDIR),
-                input_ref("input_task_subdir", task_dir),
+                input_ref("input_data_dir", data_dir),
+                _labels_ref(cfg.external_labels_dir),
                 input_ref(role, source_path) if role else None,
             ],
             config=cfg,
@@ -90,17 +107,31 @@ class _PredictRunMixin:
             table = validate_predictions(predictions.drop("split", strict=False).to_arrow())
             pq.write_table(table, staging / PREDICTIONS_FILENAME)
             extras["source"] = {"role": role or "packaged_model", "path": str(source_path or "")}
+            extras["labels"] = label_summary
             extras["coverage"] = coverage
             extras["splits"] = sorted(index["split"].unique().to_list())
 
         logger.info("Wrote %d predictions to %s.", len(predictions), output_dir / PREDICTIONS_FILENAME)
         return output_dir
 
-    def _validate_source(self, cfg: DictConfig, role: str | None, value) -> Path | None:
-        """Resolve the arbitrated source to a path and check its manifest declares the right artifact type."""
+    def _validate_source(self, cfg: DictConfig, role: str | None, value, data_dir=None) -> Path | None:
+        """Resolve the arbitrated source to a path and check its manifest declares the right artifact type.
+
+        A ``*_subdir`` source can only be resolved once the workspace is known, which may itself have to be
+        recovered from a ``*_dir`` source. Those cases are disjoint — a command has exactly one source — so
+        a subdir source implies the workspace was given explicitly.
+        """
         if role is None:
             return None
-        path = resolve_subdir(cfg.input_data_dir, value) if role.endswith("_subdir") else Path(value)
+        if role.endswith("_subdir"):
+            if not data_dir:
+                raise ValueError(
+                    f"{role} is relative to the workspace, so input_data_dir must be given explicitly when "
+                    "predicting from inference artifacts."
+                )
+            path = resolve_subdir(data_dir, value)
+        else:
+            path = Path(value)
         require_kind = InferenceKind.embeddings if role == "input_inference_subdir" else None
         read_manifest(path, require_type=_SOURCE_ARTIFACT_TYPES[role], require_kind=require_kind)
         return path
@@ -251,7 +282,7 @@ class ZeroShotPredictCommand(_PredictRunMixin, PredictCommand):
         return self.resolve(cfg, module, index)
 
     def resolve(self, cfg: DictConfig, module, index: pl.DataFrame) -> pl.DataFrame:
-        """Turn model outputs at the index timepoints into probabilities for ``cfg.external_task_file``.
+        """Turn model outputs at the index timepoints into probabilities for the task.
 
         Implement this in your model. Parse the task with
         :func:`meds_model_base.tasks.load_task_config` and resolve it over the model's outputs — over
@@ -266,20 +297,12 @@ class ZeroShotPredictCommand(_PredictRunMixin, PredictCommand):
         )
 
 
-def task_definition_path(task_dir: Path | str) -> Path | None:
-    """Recover the *definition* (e.g. the ACES YAML) a materialized task came from, via its manifest.
-
-    Zero-shot and query models need to know what to predict, not just where. Rather than add a second task
-    argument to ``predict`` — and with it the chance of passing a definition that disagrees with the
-    materialized labels — the definition is read from the task artifact that ``preprocess_task`` recorded.
-
-    Returns None when the task was materialized from pre-extracted labels, which carry no definition.
-    """
-    manifest = read_manifest(task_dir, require_type=ArtifactType.task)
-    source = (manifest.get("source") or {}).get("external_task_file")
-    if not source or manifest.get("materialization") != "aces_extracted":
-        return None
-    return Path(source)
+def _labels_ref(labels_dir) -> dict:
+    """An ``inputs`` entry for a plain labels directory: no manifest of its own, so digest the contents."""
+    ref: dict = {"role": "external_labels_dir", "path": str(labels_dir)}
+    if (digest := dir_digest(labels_dir)) is not None:
+        ref["digest"] = digest
+    return ref
 
 
 def _select_prediction_columns(frame: pl.DataFrame) -> pl.DataFrame:
@@ -298,7 +321,6 @@ def _select_prediction_columns(frame: pl.DataFrame) -> pl.DataFrame:
 __all__ = [
     "PREDICTIONS_FILENAME",
     "CoverageError",
-    "task_definition_path",
     "MaterializedPredictCommand",
     "PackagedPredictCommand",
     "ProbePredictCommand",

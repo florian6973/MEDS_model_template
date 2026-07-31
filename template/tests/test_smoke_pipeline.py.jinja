@@ -20,18 +20,16 @@ from {{ model_slug }}.model import Model
 
 
 def test_workspace_is_published_with_manifests(data_dir):
-    """preprocess_data and preprocess_task publish self-describing artifacts. No model involved."""
+    """preprocess_data publishes a self-describing artifact. No model involved."""
     patients = yaml.safe_load((data_dir / "patients" / "manifest.yaml").read_text())
     assert patients["artifact"]["type"] == "data"
     assert patients["command"] == "preprocess_data"
-
-    task = yaml.safe_load((data_dir / "tasks" / "task" / "manifest.yaml").read_text())
-    assert task["artifact"]["type"] == "task"
-    assert task["materialization"] == "passed_through"
-    assert task["labels"], "the task manifest should summarize its labels per split"
+    # The subject splits must travel with the artifact: every command that materializes labels needs
+    # them, and meds-torch-data does not carry them through tensorization.
+    assert (data_dir / "patients" / "metadata" / "subject_splits.parquet").is_file()
 
 
-def test_conflicting_sources_are_rejected(data_dir, tmp_path):
+def test_conflicting_sources_are_rejected(data_dir, labels_dir, tmp_path):
     """Two prediction sources is an error, not a precedence decision. Needs no model."""
     if CommandName.predict not in COMMANDS or len(COMMANDS[CommandName.predict].sources) < 2:
         pytest.skip("this model's predict command has fewer than two possible sources")
@@ -43,6 +41,7 @@ def test_conflicting_sources_are_rejected(data_dir, tmp_path):
             "meds-model",
             "predict",
             f"input_data_dir={data_dir}",
+            f"external_labels_dir={labels_dir}",
             "input_supervised_model_dir=/nonexistent/supervised",
             "input_pretrained_model_dir=/nonexistent/pretrained",
             f"output_predictions_dir={tmp_path / 'never'}",
@@ -54,9 +53,9 @@ def test_conflicting_sources_are_rejected(data_dir, tmp_path):
     assert "more than one input source" in (result.stdout + result.stderr)
 
 
-def test_end_to_end(chain, data_dir, tmp_path):
+def test_end_to_end(chain, data_dir, labels_dir, tmp_path):
     skip_if_stub(Model)
-    artifacts = chain(data_dir, tmp_path)
+    artifacts = chain(data_dir, labels_dir, tmp_path)
 
     for role in ("pretrained", "supervised"):
         if role in artifacts:

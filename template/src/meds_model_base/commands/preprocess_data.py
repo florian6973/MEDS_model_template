@@ -16,12 +16,13 @@ from __future__ import annotations
 
 import logging
 import os
+import shutil
 import subprocess
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from ..manifest import ArtifactType, input_ref, write_artifact
-from ..schemas import code_metadata_filepath
+from ..schemas import code_metadata_filepath, subject_splits_filepath
 from .base import PreprocessDataCommand
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -66,6 +67,7 @@ class DefaultPreprocessDataCommand(PreprocessDataCommand):
                 mtd_input = intermediate
 
             self._run_mtd(mtd_input, staging, do_reshard=do_reshard)
+            _preserve_subject_splits(external_meds_dir, staging)
             _validate_tensorized(staging)
 
             extras["source"] = {"external_meds_dir": str(external_meds_dir)}
@@ -109,6 +111,25 @@ class DefaultPreprocessDataCommand(PreprocessDataCommand):
         )
 
 
+def _preserve_subject_splits(meds_dir: Path, staging: Path) -> None:
+    """Copy the subject-split table into the published artifact.
+
+    meds-torch-data does not carry it through tensorization, and every command that materializes labels
+    needs it to partition them. Copying it here (a few KB) is what makes ``patients/`` self-contained:
+    nothing downstream has to know where the raw dataset was, or whether it still exists.
+    """
+    src = meds_dir / subject_splits_filepath
+    if not src.is_file():
+        raise FileNotFoundError(
+            f"No subject splits at {src}. A canonical MEDS dataset must define train/tuning/held_out "
+            "splits; without them labels cannot be partitioned for training."
+        )
+    dst = staging / subject_splits_filepath
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(src, dst)
+    logger.info("Copied subject splits into the patients artifact.")
+
+
 def _validate_tensorized(output_dir: Path) -> None:
     """Check the invariants a bare schema ``validate()`` misses, before the artifact is published."""
     codes_fp = output_dir / code_metadata_filepath
@@ -127,8 +148,6 @@ def _validate_tensorized(output_dir: Path) -> None:
 def _describe_cohort(meds_dir: Path, tensorized: Path) -> dict:
     """Best-effort cohort statistics for the manifest (subjects per split, vocabulary size)."""
     import polars as pl
-
-    from ..schemas import subject_splits_filepath
 
     described: dict = {}
     splits_fp = meds_dir / subject_splits_filepath
