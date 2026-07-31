@@ -223,13 +223,31 @@ control) that `skip_if_stub` until `model.py` is implemented. Both drive the cha
 `conftest.run_chain`, which reads `COMMANDS` and each class's `supported_sources` rather than hardcoding a
 chain — so a DAG whose wiring and implementation disagree fails instead of silently testing something else.
 
+`test_meds_dev_e2e` is a third `skip_if_stub` tier, and the only one that leaves this repository's
+environment: it clones MEDS-DEV, installs it editable into its own venv, registers the model with
+`meds-model-add-to-meds-dev`, and runs `meds-dev-model mode=full dataset_type=full` — one invocation that
+covers every profile, because MEDS-DEV itself walks whatever stages the model declares and rolls
+`model_initialization_dir` forward. It is marked `slow` *and* `meds_dev`, and skips unless `MEDS_DEV_DIR`
+(cloned, never mutated) or `MEDS_DEV_CLONE=1` is set, so no ordinary test run touches the network:
+
+```bash
+MEDS_DEV_DIR=~/Git/MEDS-DEV UV_TORCH_BACKEND=cpu uv run pytest -m meds_dev -rs
+```
+
+Two things it must keep doing, both learned by running it: install MEDS-DEV from a **git clone** (it
+versions itself with `setuptools-scm`, so a `.git`-less copy cannot be built at all), and let MEDS-DEV
+build its own isolated venv rather than sharing this one — MEDS-DEV pins `meds==0.3.3` against the
+template's `meds~=0.4`.
+
 ## Known gaps
 
-- **No end-to-end MEDS-DEV run.** `model.yaml.jinja` is written against MEDS-DEV's actual placeholder
-  contract (checked against its source and two real models), but has never been executed by MEDS-DEV.
-  `test_meds_dev_helper_writes_where_the_loader_looks` narrows this a little by replaying MEDS-DEV's own
-  discovery glob (`rglob("*/model.yaml")` keyed on the parent directory) against what the helper writes,
-  but it stubs the checkout — MEDS-DEV itself is never imported.
+- **No *complete* MEDS-DEV run**, for the same reason nothing trains: the chain reaches the model and stops.
+  `tests/test_meds_dev_e2e.py` in a generated repo is the real thing (clone MEDS-DEV → install editable →
+  register via the helper → `meds-dev-model mode=full` → assert `predictions.parquet` against
+  `PredictionSchema`), and it `skip_if_stub`s like the rest of the conformance suite. Everything in it
+  *up to the model* has been executed for real: MEDS-DEV built its isolated venv from the generated
+  `requirements.txt` with a working `meds-model` entry point, filled its placeholders, and ran
+  `preprocess_data` through to a published workspace. The final assertions have never run.
 - **Nothing trains.** A generated repo ships no model, so no chain has ever run training or prediction —
   only preprocessing, dispatch and config composition. Closing that needs a reference implementation
   outside the payload.

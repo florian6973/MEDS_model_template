@@ -1,5 +1,11 @@
 name: CI
-on: [push, pull_request]
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    # Weekly: the MEDS-DEV job is too heavy for every push, but stale breakage there is invisible.
+    - cron: "0 6 * * 1"
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -15,3 +21,23 @@ jobs:
       - run: uv run ruff check .
       - run: uv run ruff format --check .
       - run: uv run pytest -m "not slow"
+
+  meds-dev:
+    # End-to-end the way MEDS-DEV runs this model: it clones MEDS-DEV, installs it, then lets MEDS-DEV
+    # build its own isolated venv from `requirements.txt` and drive the whole chain. Slow (it installs
+    # torch), so it is not on the push path. While `model.py` is a stub the job skips and costs a minute.
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uv sync --all-extras --dev
+      - run: uv run pytest -m meds_dev -rs
+        env:
+          MEDS_DEV_CLONE: "1"
+          # MEDS-DEV installs this model with a plain `uv pip install -r`, which would otherwise resolve
+          # the CUDA build of torch into a runner that has no GPU.
+          UV_TORCH_BACKEND: cpu

@@ -1,0 +1,209 @@
+"""Tier 4 — the MEDS-DEV contract: does this model run the way *MEDS-DEV* runs it?
+
+Every other test drives the DAG through `meds-model` directly, inside this repository's own environment.
+MEDS-DEV does none of that. It reads `model.yaml`, builds an **isolated venv** from `requirements.txt`,
+and executes the command strings with its own `{placeholder}` substitutions. That layer has failure modes
+nothing else here can see:
+
+- a `requirements.txt` that installs MEDS-DEV instead of this model, leaving no `meds-model` entry point
+  (`uv pip install -r` runs from MEDS-DEV's working directory, so a relative `-e .` resolves to the wrong
+  repository and every command dies with `command not found`);
+- a `{model_initialization_dir}` that does not roll forward the way this chain assumes — it is a single
+  pointer to the most recent *training* output, not to the workspace;
+- a `model.yaml` whose `metadata` block MEDS-DEV cannot parse, which raises at import and takes down the
+  whole `meds-dev-*` CLI rather than just this model.
+
+The isolation is not incidental, and it is why MEDS-DEV is never installed into this repository's venv:
+MEDS-DEV pins `meds==0.3.3` while this model needs `meds~=0.4`. They coexist only as separate
+environments, exactly as they do in a real benchmark run.
+
+Runs `mode=full dataset_type=full`, which is how MEDS-DEV actually drives a model: every stage the model
+declares, in declared order, with `model_initialization_dir` rolled forward in between. One invocation
+therefore covers whichever profile this repository was generated with, without branching on it.
+
+**Skips while `model.py` is the generated stub**, like the rest of the conformance suite — this is the
+contract your model has to satisfy, and it starts running the moment you remove the `is_stub` marker.
+
+Opt-in and slow. It installs MEDS-DEV, then lets MEDS-DEV install *this repository* into a fresh venv:
+
+    MEDS_DEV_DIR=~/MEDS-DEV uv run pytest -m meds_dev   # a local checkout (copied, never mutated)
+    MEDS_DEV_CLONE=1 uv run pytest -m meds_dev          # clone MEDS-DEV from GitHub
+
+Set `UV_TORCH_BACKEND=cpu` unless you want CUDA wheels pulled into that isolated venv.
+"""
+import os
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+import polars as pl
+import pytest
+import yaml
+from meds_evaluation.schema import PredictionSchema
+from meds_model_base.commands import CommandName
+from meds_model_base.testing import skip_if_stub
+
+from {{ model_slug }}.commands import COMMANDS
+from {{ model_slug }}.model import Model
+
+pytestmark = [pytest.mark.slow, pytest.mark.meds_dev]
+
+MEDS_DEV_URL = "https://github.com/Medical-Event-Data-Standard/MEDS-DEV.git"
+
+#: This repository, which MEDS-DEV will install into its isolated environment.
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
+MODEL_NAME = "{{ model_slug }}"
+
+#: `mode=full` names its output subdirectories after these, so they decide where predictions land.
+DATASET_NAME = "synthetic"
+TASK_NAME = "smoke_task"
+
+INSTALL_TIMEOUT = 1800
+#: MEDS-DEV builds a venv and installs this model (torch included) before the first command runs.
+RUN_TIMEOUT = 5400
+
+
+def _venv_bin(root: Path) -> Path:
+    return root / ".venv" / ("Scripts" if sys.platform == "win32" else "bin")
+
+
+def _run(cmd: list, *, timeout: int, env: dict | None = None) -> subprocess.CompletedProcess:
+    """Run a command, failing the test with its full output rather than a bare returncode."""
+    argv = [str(c) for c in cmd]
+    environment = None if env is None else {**os.environ, **env}
+    result = subprocess.run(argv, capture_output=True, text=True, timeout=timeout, env=environment)
+    if result.returncode != 0:
+        raise AssertionError(
+            f"command failed with exit code {result.returncode}:\n  {' '.join(argv)}\n"
+            f"--- stdout ---\n{result.stdout}\n--- stderr ---\n{result.stderr}"
+        )
+    return result
+
+
+@pytest.fixture(scope="session")
+def meds_dev(tmp_path_factory) -> Path:
+    """A private MEDS-DEV clone with an editable install in ``<checkout>/.venv``.
+
+    Always a clone, never the directory you point at: registering a model *writes into*
+    `src/MEDS_DEV/models/`, so working in place would leave a stray model directory in a checkout you care
+    about. A local `git clone` hardlinks its objects, so this is cheap.
+
+    It is a clone rather than a `copytree` for a second reason: MEDS-DEV takes its version from
+    `setuptools-scm`, so a tree without `.git` cannot be installed at all — the build fails with
+    ``LookupError: setuptools-scm was unable to detect version``. The `SETUPTOOLS_SCM_PRETEND_VERSION_FOR_`
+    override below covers the remaining case of a clone whose tags did not come with it.
+
+    The editable install is what makes registration real: MEDS-DEV discovers models through
+    `importlib.resources`, so only the *installed* tree counts.
+    """
+    skip_if_stub(Model)
+
+    uv = shutil.which("uv")
+    if uv is None:
+        pytest.skip("uv is required: MEDS-DEV builds its per-model environment with it")
+    git = shutil.which("git")
+    if git is None:
+        pytest.skip("git is required: MEDS-DEV is installed from a clone, and versions itself from git")
+
+    source = os.environ.get("MEDS_DEV_DIR")
+    checkout = tmp_path_factory.mktemp("meds_dev") / "MEDS-DEV"
+
+    if source:
+        if not (Path(source) / ".git").is_dir():
+            pytest.skip(f"MEDS_DEV_DIR={source} is not a git checkout, so MEDS-DEV cannot be installed")
+        # Committed state only — uncommitted MEDS-DEV edits are deliberately not under test here.
+        _run([git, "clone", source, checkout], timeout=INSTALL_TIMEOUT)
+    elif os.environ.get("MEDS_DEV_CLONE"):
+        # Treeless rather than shallow: it is nearly as fast but keeps the tags setuptools-scm reads.
+        _run([git, "clone", "--filter=blob:none", MEDS_DEV_URL, checkout], timeout=INSTALL_TIMEOUT)
+    else:
+        pytest.skip(
+            "set MEDS_DEV_DIR=/path/to/MEDS-DEV (it is cloned, never mutated) or MEDS_DEV_CLONE=1 to "
+            "clone it from GitHub, then rerun with -m meds_dev"
+        )
+
+    _run([uv, "venv", checkout / ".venv"], timeout=INSTALL_TIMEOUT)
+    _run(
+        [uv, "pip", "install", "-e", checkout, "--python", _venv_bin(checkout) / "python"],
+        timeout=INSTALL_TIMEOUT,
+        env={"SETUPTOOLS_SCM_PRETEND_VERSION_FOR_MEDS_DEV": "0.0.0"},
+    )
+    return checkout
+
+
+def test_meds_dev_runs_this_model_end_to_end(meds_dev, meds_root, labels_dir, tmp_path):
+    """Register this model with MEDS-DEV, run its whole chain, and score the result.
+
+    The prediction file is the deliverable: MEDS-DEV hands it to `meds-evaluation`, so it is checked
+    against the same `PredictionSchema` the in-process conformance test uses. Coverage is asserted from
+    the manifest, because a predictions file that silently drops subjects is the failure this contract
+    exists to prevent — and it looks perfectly valid on its own.
+    """
+    bin_dir = _venv_bin(meds_dev)
+
+    # Register through the shipped helper rather than a hand-rolled copy: the `requirements.txt` rewrite
+    # it performs is precisely the step most likely to be wrong, so the test must exercise it.
+    _run(
+        [
+            sys.executable,
+            "-m",
+            "meds_model_base.meds_dev",
+            "--meds-dev",
+            meds_dev,
+            "--repo",
+            REPO_ROOT,
+            "--name",
+            MODEL_NAME,
+        ],
+        timeout=INSTALL_TIMEOUT,
+    )
+
+    listed = _run(
+        [bin_dir / "python", "-c", "from MEDS_DEV import MODELS; [print(m) for m in sorted(MODELS)]"],
+        timeout=300,
+    )
+    assert MODEL_NAME in listed.stdout.split(), (
+        f"MEDS-DEV did not register `{MODEL_NAME}`. It discovers models by walking the *installed* "
+        f"package, so this means the model directory did not land there. Registered: {listed.stdout!r}"
+    )
+
+    out = tmp_path / "run"
+    _run(
+        [
+            bin_dir / "meds-dev-model",
+            f"model={MODEL_NAME}",
+            f"dataset_dir={meds_root}",
+            f"labels_dir={labels_dir}",
+            f"output_dir={out}",
+            f"dataset_name={DATASET_NAME}",
+            f"task_name={TASK_NAME}",
+            "mode=full",
+            "dataset_type=full",
+            "do_overwrite=true",
+        ],
+        timeout=RUN_TIMEOUT,
+    )
+
+    preds_dir = out / DATASET_NAME / TASK_NAME / "predict"
+    preds_file = preds_dir / "predictions.parquet"
+    assert preds_file.is_file(), (
+        f"MEDS-DEV reported success but wrote no predictions at {preds_file}. Directories produced: "
+        f"{sorted(str(p.relative_to(out)) for p in out.glob('*/*/*') if p.is_dir())}"
+    )
+
+    preds = pl.read_parquet(preds_file)
+    # The contract with the shared evaluation tool, asserted on the file MEDS-DEV will actually hand it.
+    PredictionSchema.align(preds.to_arrow())
+    assert {"subject_id", "prediction_time", "predicted_boolean_probability"}.issubset(preds.columns)
+
+    manifest = yaml.safe_load((preds_dir / "manifest.yaml").read_text())
+    coverage = manifest["coverage"]["held_out"]
+    assert coverage["n_written"] == coverage["n_expected"] == len(preds)
+
+    if CommandName.pretrain in COMMANDS:
+        # This chain has an unsupervised stage, so MEDS-DEV ran it first and rolled
+        # `model_initialization_dir` forward into the supervised one. Had that pointer been wrong, the
+        # supervised stage could not have found the workspace the unsupervised stage wrote.
+        assert (out / DATASET_NAME / "unsupervised" / "train").is_dir()
