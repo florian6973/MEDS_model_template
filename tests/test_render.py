@@ -355,6 +355,55 @@ def test_rendered_configs_parse(tmp_path, profile):
             pytest.fail(f"{fp.relative_to(dst)} is not valid YAML: {e}")
 
 
+@pytest.mark.parametrize("profile", sorted(PROFILE_COMMANDS))
+@pytest.mark.render
+def test_rendered_files_end_with_exactly_one_newline(tmp_path, profile):
+    """A generated repo must survive its own pre-commit hooks on the very first commit.
+
+    ``end-of-file-fixer`` rewrites any file not ending in exactly one newline, which turns `git commit`
+    into a failure before a new user has done anything wrong. Jinja makes this easy to produce: with
+    ``keep_trailing_newline``, a template whose last line is ``{% endif %}`` emits the branch's newline
+    *and* the template file's own, so the rendered file ends with a blank line. That is how `model.yaml`,
+    `.copier-answers.yml` and `configs/profile/default.yaml` all shipped with a trailing blank line.
+    """
+    dst = tmp_path / f"eof_{profile}"
+    _render(dst, profile)
+
+    # Tool caches are created by the post-copy `uvx ruff` task, not rendered from the payload; .gitignore
+    # is what has to cover them, which `test_gitignore_covers_the_default_workspace` asserts.
+    generated = {".git", "__pycache__", ".ruff_cache", ".pytest_cache", ".venv"}
+
+    offenders = []
+    for fp in sorted(dst.rglob("*")):
+        if not fp.is_file() or generated.intersection(fp.parts):
+            continue
+        try:
+            text = fp.read_text()
+        except UnicodeDecodeError:  # pragma: no cover - the payload is all text today
+            continue
+        if text and not (text.endswith("\n") and not text.endswith("\n\n")):
+            offenders.append(str(fp.relative_to(dst)))
+    assert not offenders, f"{profile}: files not ending in exactly one newline: {offenders}"
+
+
+@pytest.mark.render
+def test_gitignore_covers_the_default_workspace(tmp_path):
+    """``env.sh`` points ``OUTPUT_DIR`` at ``./runs`` and the README writes artifacts there.
+
+    Left untracked, a first `git add -A` sweeps in a whole training workspace — checkpoints, tensorized
+    data, predictions — which is how a fresh repo ends up trying to commit hundreds of megabytes.
+    """
+    dst = tmp_path / "ignore"
+    _render(dst, "supervised")
+
+    ignored = (dst / ".gitignore").read_text().split()
+    assert "runs/" in ignored, ".gitignore must exclude runs/"
+    assert "runs" in (dst / "env.sh").read_text(), "env.sh should still default OUTPUT_DIR to ./runs"
+
+    # `uvx ruff` runs as a post-copy task, so a fresh repo has a .ruff_cache before the user touches it.
+    assert ".ruff_cache/" in ignored, ".gitignore must exclude the cache the post-copy task creates"
+
+
 @pytest.mark.render
 def test_meds_dev_helper_writes_where_the_loader_looks(tmp_path):
     """``meds-model-add-to-meds-dev`` must place files where MEDS-DEV's discovery actually finds them.

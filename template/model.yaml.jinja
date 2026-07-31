@@ -75,4 +75,4 @@ commands:
     train: null
     predict: |-
       meds-model predict input_pretrained_model_dir={model_initialization_dir}/pretrained external_labels_dir={labels_dir} splits=[{split}] output_predictions_dir={output_dir} do_overwrite=true
-{% endif %}
+{% endif -%}
