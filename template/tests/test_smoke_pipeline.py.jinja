@@ -13,6 +13,7 @@ import pytest
 import yaml
 from meds_evaluation.schema import PredictionSchema
 from meds_model_base.commands import CommandName
+from meds_model_base.tasks import tokenized_cohort
 from meds_model_base.testing import skip_if_stub
 
 from {{ model_slug }}.commands import COMMANDS
@@ -24,9 +25,19 @@ def test_workspace_is_published_with_manifests(data_dir):
     patients = yaml.safe_load((data_dir / "patients" / "manifest.yaml").read_text())
     assert patients["artifact"]["type"] == "data"
     assert patients["command"] == "preprocess_data"
-    # The subject splits must travel with the artifact: every command that materializes labels needs
-    # them, and meds-torch-data does not carry them through tensorization.
-    assert (data_dir / "patients" / "metadata" / "subject_splits.parquet").is_file()
+
+    # Split membership must travel with the artifact, since every command that materializes labels needs
+    # it and nothing downstream may depend on the raw MEDS directory still existing. It travels as the
+    # shard layout, which is where meds-torch-data reads it from, rather than as a copy of the source
+    # dataset's subject_splits.parquet -- a copy describes the input to preprocessing, and a pipeline
+    # that filters subjects makes those two different things.
+    assert set(tokenized_cohort(data_dir / "patients"))
+    assert not (data_dir / "patients" / "metadata" / "subject_splits.parquet").exists()
+
+    # Counted from the artifact, so a filtering pipeline shows up here rather than being invisible.
+    assert patients["splits"] == {
+        split: len(subjects) for split, subjects in sorted(tokenized_cohort(data_dir / "patients").items())
+    }
 
 
 def test_inference_never_sees_ground_truth(data_dir, labels_dir, tmp_path):

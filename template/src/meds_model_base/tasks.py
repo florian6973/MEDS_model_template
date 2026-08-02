@@ -22,7 +22,7 @@ from pathlib import Path
 
 import polars as pl
 
-from .schemas import SPLITS, LabelSchema, subject_splits_filepath
+from .schemas import LabelSchema
 
 logger = logging.getLogger(__name__)
 
@@ -66,85 +66,126 @@ def normalize_label_columns(df: pl.DataFrame, *, source: str) -> pl.DataFrame:
     return df.rename(rename).select(["subject_id", "prediction_time", "boolean_value"])
 
 
-def read_labels(external_labels_dir: Path | str) -> pl.DataFrame | dict[str, pl.DataFrame]:
-    """Read a labels directory (or single parquet) into canonical form.
+def read_labels(external_labels_dir: Path | str) -> pl.DataFrame:
+    """Read a labels directory (or single parquet) into one canonical frame.
 
-    A directory may be organized either way, and both occur:
+    **Accepted layouts.** Any of these, because all of them occur:
 
-    - **already split** — ``{train,tuning,held_out}.parquet``. Returned keyed by split; no subject-split
-      table is needed.
-    - **arbitrary shards** — any other ``*.parquet`` layout, which is what MEDS-DEV and the
-      ``meds_testing_helpers`` fixtures produce (``labels_A.parquet``, ``labels_B.parquet``, …). Returned
-      as one frame, to be partitioned by :func:`split_labels`.
+    - a single ``*.parquet`` file;
+    - a directory of parquet files at any depth, in any arrangement — ``labels.parquet``,
+      ``train.parquet``/``tuning.parquet``/``held_out.parquet``, ``train/0.parquet``, ``shard_A.parquet``.
 
-    Shard names carry no meaning, so they are concatenated rather than interpreted — guessing a split from
-    a filename would silently mis-assign subjects.
+    Every ``*.parquet`` found is a shard, whatever it is named, and they are concatenated without
+    interpretation. Directories whose name begins with ``.`` are skipped: ``meds-dev-task`` always writes
+    a ``.logs/`` beside its output, and a run's logs are not label data.
+
+    Each shard must carry a subject id, a prediction time and a boolean label under one of the spellings
+    :func:`normalize_label_columns` accepts; anything else fails there, naming the offending file and the
+    columns it does have.
+
+    **The layout carries no split information this package acts on.** Which split a labelled subject
+    belongs to is decided by :func:`tokenized_cohort`, from the artifact the labels will be used against.
+
+    That matters most for the layout which looks like it says otherwise. ``meds-dev-task`` runs ACES per
+    input shard into ``{output_dir}/${data._prefix}.parquet``, so against a split-sharded dataset (what
+    ``meds-dev-dataset`` produces) it emits ``train/0.parquet``, ``tuning/0.parquet``,
+    ``held_out/0.parquet``. Those names are the *input shard* names; they coincide with split names only
+    because that dataset happened to be sharded by split, and nothing ties the labels directory to the
+    dataset this model preprocessed. Reading a split out of a path would be a second source of truth about
+    something the cohort already answers.
     """
     p = Path(external_labels_dir)
-    if p.is_dir():
-        by_split = {
-            split: pl.read_parquet(p / f"{split}.parquet")
-            for split in SPLITS
-            if (p / f"{split}.parquet").is_file()
-        }
-        if by_split:
-            return {
-                split: normalize_label_columns(df, source=f"{p / f'{split}.parquet'}")
-                for split, df in by_split.items()
-            }
-
-        shards = sorted(p.rglob("*.parquet"))
-        if not shards:
-            raise TaskMaterializationError(f"{p} is a directory but contains no parquet files.")
-        logger.info("Reading %d label shard(s) from %s.", len(shards), p)
-        return pl.concat(
-            [normalize_label_columns(pl.read_parquet(fp), source=str(fp)) for fp in shards],
-            how="vertical_relaxed",
-        ).unique(maintain_order=True)
-
-    if not p.is_file():
+    if p.is_file():
+        return normalize_label_columns(pl.read_parquet(p), source=str(p))
+    if not p.is_dir():
         raise TaskMaterializationError(f"external_labels_dir {p} does not exist.")
-    return normalize_label_columns(pl.read_parquet(p), source=str(p))
 
-
-def load_subject_splits(patients_dir: Path | str) -> pl.DataFrame:
-    """Load the subject-split table from a published ``patients/`` artifact.
-
-    ``preprocess_data`` copies this out of the source dataset precisely so that later commands do not
-    depend on the raw MEDS directory still existing — meds-torch-data does not preserve it itself.
-    """
-    fp = Path(patients_dir) / subject_splits_filepath
-    if not fp.is_file():
+    shards = [
+        fp
+        for fp in sorted(p.rglob("*.parquet"))
+        if not any(part.startswith(".") for part in fp.relative_to(p).parts)
+    ]
+    if not shards:
         raise TaskMaterializationError(
-            f"No subject splits at {fp}. The patients artifact was built by an older version of this "
-            "template; re-run `preprocess_data` to record them."
+            f"{p} is a directory but contains no label parquet files. Expected a MEDS labels directory: "
+            "one or more *.parquet with (subject_id, prediction_time, boolean_value), such as "
+            "meds-dev-task's train/0.parquet, tuning/0.parquet, held_out/0.parquet."
         )
-    return pl.read_parquet(fp)
+    logger.info("Reading %d label shard(s) from %s.", len(shards), p)
+    return pl.concat(
+        [normalize_label_columns(pl.read_parquet(fp), source=str(fp)) for fp in shards],
+        how="vertical_relaxed",
+    ).unique(maintain_order=True)
 
 
-def split_labels(labels: pl.DataFrame, splits: pl.DataFrame) -> dict[str, pl.DataFrame]:
-    """Partition a label table by MEDS subject split.
+def tokenized_cohort(patients_dir: Path | str) -> dict[str, set[int]]:
+    """Subjects actually present in a tensorized cohort, keyed by split.
 
-    Subjects absent from the split table are dropped with a warning: they cannot be assigned to train,
-    tuning or held_out, so silently keeping them would put unassigned subjects into an arbitrary split.
+    Read from ``tokenization/schemas/<split>/*.parquet``, which is where meds-torch-data itself resolves
+    split membership from — ``MEDSPytorchDataset`` keeps a shard only when its name starts with
+    ``f"{split}/"`` and never opens ``subject_splits.parquet``. Reading the same place is what makes the
+    two impossible to disagree.
+
+    A schema file with no leading split component belongs to no split, exactly as meds-torch-data treats
+    it; such shards are skipped rather than guessed at.
     """
-    joined = labels.join(splits.select(["subject_id", "split"]), on="subject_id", how="left")
-    unassigned = joined.filter(pl.col("split").is_null())
-    if len(unassigned):
-        logger.warning(
-            "Dropping %d label rows for %d subjects absent from subject_splits.parquet.",
-            len(unassigned),
-            unassigned["subject_id"].n_unique(),
+    schema_dir = Path(patients_dir) / "tokenization" / "schemas"
+    if not schema_dir.is_dir():
+        raise TaskMaterializationError(
+            f"No tokenization schemas under {schema_dir}; {patients_dir} is not a tensorized cohort."
         )
+    cohort: dict[str, set[int]] = {}
+    for fp in sorted(schema_dir.rglob("*.parquet")):
+        shard = fp.relative_to(schema_dir).with_suffix("")
+        if len(shard.parts) < 2:
+            continue
+        subjects = pl.read_parquet(fp, columns=["subject_id"])["subject_id"].to_list()
+        cohort.setdefault(shard.parts[0], set()).update(subjects)
+    return cohort
+
+
+def split_labels(labels: pl.DataFrame, cohort: dict[str, set[int]]) -> dict[str, pl.DataFrame]:
+    """Partition labels by the split each subject was actually tokenized into.
+
+    The cohort is the authority, not the dataset's ``subject_splits.parquet``, because the cohort is what
+    the labels will be used against. A ``preprocess_data`` pipeline that filters subjects —
+    ``filter_subjects``, or a ``filter_measurements`` aggressive enough to empty someone's timeline —
+    tokenizes them away while their labels survive untouched. Partitioning from the source table would
+    keep those labels, and nothing would notice: ``pretrain`` and ``supervised_train`` read training data
+    through the schema directories, see only the survivors, and succeed. ``predict`` is the first command
+    to compare the two, and it fails with ``CoverageError`` pointing at prediction rather than at the
+    preprocessing that caused it, two training runs too late.
+
+    Partitioning from the cohort makes ``n_expected`` correct at the point the labels are written, so the
+    coverage guard stops firing because the expectation became true — not because the guard was weakened.
+    A subject in no split simply lands in no partition, so the drop needs no separate pass.
+
+    The two cannot disagree about a subject that *is* present: a split-sharded dataset's layout, and
+    anything ``reshard_to_split`` produces, are both derived from that same table.
+    """
     out: dict[str, pl.DataFrame] = {}
-    for split in SPLITS:
-        part = joined.filter(pl.col("split") == split).drop("split")
-        if len(part):
+    kept = 0
+    for split, subjects in sorted(cohort.items()):
+        part = labels.filter(pl.col("subject_id").is_in(sorted(subjects)))
+        kept += part.height
+        if part.height:
             out[split] = part
+
     if not out:
         raise TaskMaterializationError(
-            "No label rows fell into any MEDS split; check that the labels and the dataset refer to the "
-            "same subject ids."
+            "No label row matched any subject in the tensorized cohort. Either these labels are for a "
+            "different dataset, or the preprocess_data pipeline filtered the whole cohort away."
+        )
+    if kept < labels.height:
+        dropped = labels.filter(
+            ~pl.col("subject_id").is_in(sorted(set().union(*cohort.values())))
+        )
+        logger.warning(
+            "Dropping %d label row(s) for %d subject(s) absent from the tensorized cohort: either "
+            "filtered out by the preprocess_data pipeline (its manifest records how many), or not part "
+            "of this dataset.",
+            labels.height - kept,
+            dropped["subject_id"].n_unique(),
         )
     return out
 
@@ -172,12 +213,7 @@ def materialize_labels(
     dest = Path(dest)
     dest.mkdir(parents=True, exist_ok=True)
 
-    loaded = read_labels(external_labels_dir)
-    by_split = (
-        loaded
-        if isinstance(loaded, dict)
-        else split_labels(loaded, load_subject_splits(patients_dir))
-    )
+    by_split = split_labels(read_labels(external_labels_dir), tokenized_cohort(patients_dir))
 
     for split, df in by_split.items():
         if not include_labels:
@@ -221,10 +257,10 @@ def summarize_labels(
 
 __all__ = [
     "TaskMaterializationError",
-    "load_subject_splits",
     "materialize_labels",
     "normalize_label_columns",
     "read_labels",
     "split_labels",
     "summarize_labels",
+    "tokenized_cohort",
 ]

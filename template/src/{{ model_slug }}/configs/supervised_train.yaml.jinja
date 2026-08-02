@@ -17,7 +17,11 @@ defaults:
 
 input_data_dir: ${data_dir}
 
-#: A MEDS labels directory, as produced by `meds-dev-task` or any ACES run.
+#: A MEDS labels directory: any arrangement of *.parquet carrying
+#: (subject_id, prediction_time, boolean_value). `meds-dev-task` writes train/0.parquet,
+#: tuning/0.parquet, held_out/0.parquet -- those names are input *shard* names, not splits, and are
+#: not read as such: which split a subject belongs to comes from the tokenized cohort in
+#: input_data_dir. Dot-directories (meds-dev-task's .logs/) are skipped.
 external_labels_dir: ???
 
 output_supervised_model_dir: ${models.supervised}

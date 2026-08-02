@@ -15,8 +15,13 @@ defaults:
 #: caller point only at a model whose workspace lives elsewhere.
 input_data_dir: null
 
-#: A MEDS labels directory. The model only ever sees (subject_id, prediction_time): boolean_value is
-#: dropped before the batch is built, so it cannot read the answer it is about to be scored against.
+#: A MEDS labels directory: any arrangement of *.parquet carrying
+#: (subject_id, prediction_time, boolean_value). `meds-dev-task` writes train/0.parquet,
+#: tuning/0.parquet, held_out/0.parquet -- those names are input *shard* names, not splits, and are
+#: not read as such: which split a subject belongs to comes from the tokenized cohort in
+#: input_data_dir. Dot-directories (meds-dev-task's .logs/) are skipped.
+#: The model only ever sees (subject_id, prediction_time): boolean_value is dropped before the
+#: batch is built, so it cannot read the answer it is about to be scored against.
 external_labels_dir: ???
 
 output_predictions_dir: ${predictions_dir}
