@@ -25,7 +25,7 @@ grep -rhoE 'cfg\.[a-z_]+' src/meds_model_base/ | sort -u
 grep -rnE 'if [a-z_]*\bcfg\.|if bool\(cfg|if cfg\.' --include="*.py" src/meds_model_base/
 
 # 3. what the generated repo tells its user about them
-for k in <keys>; do grep -c "$k" README.md.jinja ../design-interface.md; done
+for k in <keys>; do grep -c "$k" README.md.jinja ../docs/design-interface.md; done
 ```
 
 ## 1. Inert keys — Hydra plumbing, no branch

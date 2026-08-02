@@ -31,7 +31,7 @@ meds-model predict           input_supervised_model_dir=runs/models/supervised \
 ```
 
 A given model supports a *subset* of these; `meds-model commands` prints which. The commands form a **DAG,
-not a fixed pipeline** — see [`design-interface.md`](design-interface.md) for the full specification.
+not a fixed pipeline** — see [`docs/design-interface.md`](docs/design-interface.md) for the full specification.
 
 ## The five commands
 
@@ -85,7 +85,7 @@ meds-model-new ./my-model
 ```
 
 Pick a **DAG** at generation time — one profile per chain in
-[`design-interface.md`](design-interface.md):
+[`docs/design-interface.md`](docs/design-interface.md):
 
 | Profile | Chain | `predict` consumes | Like |
 |---|---|---|---|
@@ -129,9 +129,9 @@ copier update            # 3-way merge: pulls the new contract into src/meds_mod
 
 ## Docs
 
-- [`design-interface.md`](design-interface.md) — the authoritative command and artifact specification.
+- [`docs/design-interface.md`](docs/design-interface.md) — the authoritative command and artifact specification.
 - [`docs/DESIGN.md`](docs/DESIGN.md) — background on the MEDS-ecosystem APIs this is built on. Note that
-  its command vocabulary predates `design-interface.md`.
+  its command vocabulary predates `docs/design-interface.md`.
 
 ## License
 

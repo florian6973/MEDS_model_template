@@ -38,7 +38,7 @@ ALL_COMMANDS = {
 ALWAYS = {"preprocess_data"}
 
 #: profile → the exact set of commands its ``commands.py`` should register. One entry per DAG in
-#: design-interface.md's "Supported pipeline chains".
+#: docs/design-interface.md's "Supported pipeline chains".
 PROFILE_COMMANDS = {
     "supervised": ALWAYS | {"supervised_train", "predict"},
     "finetune": ALWAYS | {"pretrain", "supervised_train", "predict"},

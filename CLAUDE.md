@@ -18,7 +18,7 @@ Two distinct codebases live here, and they are built/tested differently:
 README.md carries a warning that the repo is AI-generated and unreviewed; treat existing code as
 unverified rather than as settled precedent.
 
-**[`design-interface.md`](design-interface.md) is the authoritative spec** for the command graph, artifact
+**[`docs/design-interface.md`](docs/design-interface.md) is the authoritative spec** for the command graph, artifact
 layout, manifests, and the arbitration/coverage rules. `docs/DESIGN.md` predates it and carries a banner
 saying so — it is useful for background (why Copier, the verified ecosystem APIs) but its five-step CLI
 vocabulary is obsolete.
@@ -187,7 +187,7 @@ Each of these otherwise produces output that looks correct, so don't "simplify" 
 
 ### Profiles are DAGs
 
-There is one profile per chain in `design-interface.md`: `supervised`, `finetune`, `probe`,
+There is one profile per chain in `docs/design-interface.md`: `supervised`, `finetune`, `probe`,
 `zero_shot_direct`, `zero_shot_materialized`, `packaged`, plus `custom`. Adding a chain to the spec means
 adding a profile, and `tests/test_render.py::test_every_command_class_is_reachable` fails if a command
 class exists that no profile registers — which is how `MaterializedPredictCommand` was caught sitting dead.

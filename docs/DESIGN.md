@@ -1,7 +1,7 @@
 # MEDS Model Template — Design
 
 > [!IMPORTANT]
-> **Superseded in part by [`../design-interface.md`](../design-interface.md).** That document is the
+> **Superseded in part by [`design-interface.md`](design-interface.md).** That document is the
 > authoritative specification of the command and artifact interface: six commands forming a DAG
 > (`preprocess_data`, `preprocess_task`, `pretrain`, `infer`, `supervised_train`, `predict`), the shared
 > `data_dir` workspace, per-artifact manifests, and the argument-arbitration and coverage rules.
