@@ -1,3 +1,8 @@
+# The default logger: a CSV file per run, no service and no credentials. Always present.
+#
+# Each member of this group is a mapping of name → logger config, because `build_trainer` instantiates
+# every `_target_` child of `cfg.logger` and passes the list to the Trainer. A file can therefore declare
+# several loggers at once — but a bare `_target_` at the top level declares none.
 csv:
   _target_: lightning.pytorch.loggers.CSVLogger
   save_dir: ${log_dir}

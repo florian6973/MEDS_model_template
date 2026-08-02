@@ -71,8 +71,13 @@ cd /tmp/demo && uv venv \
   && uv run pytest -m "not slow" -q -rs
 ```
 
-Expect ~29 passed and 1 skipped: the skip is `skip_if_stub`, and it is the correct result — everything
-that does not need a model runs, including real MTD tensorization and task materialization.
+Expect ~37 passed and 2 skipped, and both skips are the correct result — everything that does not need a
+model runs, including real MTD tensorization and task materialization. One skip is `skip_if_stub`; the
+other is `test_unsupported_command_fails_clearly`, whose parameter set is empty for `probe` because that
+DAG registers all five commands.
+
+Add `'use_wandb': True, 'use_mlflow': True` to that `data` dict to render the optional logger configs —
+otherwise `logger=csv` is the only thing the generated suite ever composes.
 
 If `copier`/`uv` are unavailable, `template/` can still be checked with a plain jinja2 render harness:
 walk the tree, render `*.jinja` and path segments, then `compileall` the result and `yaml.safe_load` every

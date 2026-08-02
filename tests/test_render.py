@@ -59,15 +59,15 @@ SOURCE_PRODUCER = {
 COMMAND_CONFIGS = sorted(ALL_COMMANDS)
 
 
-def _render(dst: Path, profile: str) -> str:
-    """Render ``profile`` into ``dst``; return the model slug."""
+def _render(dst: Path, profile: str, **answers) -> str:
+    """Render ``profile`` into ``dst``; return the model slug. ``answers`` overrides other questions."""
     from copier import run_copy
 
     slug = f"m_{profile}"
     run_copy(
         str(REPO),
         str(dst),
-        data={"model_slug": slug, "model_name": f"Demo {profile}", "profile": profile},
+        data={"model_slug": slug, "model_name": f"Demo {profile}", "profile": profile, **answers},
         defaults=True,
         unsafe=True,  # allow post-gen tasks (git init + best-effort `uvx ruff`, both no-ops if unavailable)
         quiet=True,
@@ -368,7 +368,12 @@ def test_rendered_files_end_with_exactly_one_newline(tmp_path, profile):
     """
     dst = tmp_path / f"eof_{profile}"
     _render(dst, profile)
+    offenders = _bad_eof(dst)
+    assert not offenders, f"{profile}: files not ending in exactly one newline: {offenders}"
 
+
+def _bad_eof(dst: Path) -> list[str]:
+    """Rendered files that do not end in exactly one newline (see the test above)."""
     # Tool caches are created by the post-copy `uvx ruff` task, not rendered from the payload; .gitignore
     # is what has to cover them, which `test_gitignore_covers_the_default_workspace` asserts.
     generated = {".git", "__pycache__", ".ruff_cache", ".pytest_cache", ".venv"}
@@ -383,7 +388,71 @@ def test_rendered_files_end_with_exactly_one_newline(tmp_path, profile):
             continue
         if text and not (text.endswith("\n") and not text.endswith("\n\n")):
             offenders.append(str(fp.relative_to(dst)))
-    assert not offenders, f"{profile}: files not ending in exactly one newline: {offenders}"
+    return offenders
+
+
+#: ``use_<name>`` question → the logger group member it is responsible for rendering, and the
+#: ``pyproject.toml`` extra that goes with it. The pairing is the contract: a question that adds a
+#: dependency but no config buys nothing, which is what these two entries used to do.
+OPTIONAL_LOGGERS = {"use_wandb": "wandb", "use_mlflow": "mlflow"}
+
+
+@pytest.mark.parametrize("enabled", [False, True], ids=["disabled", "enabled"])
+@pytest.mark.render
+def test_optional_loggers_render_with_their_extra(tmp_path, enabled):
+    """Answering yes to ``use_wandb`` / ``use_mlflow`` must render a config, not just a dependency.
+
+    Both questions used to add a ``pyproject.toml`` extra and nothing else, so the option they advertised
+    failed at composition — ``meds-model pretrain logger=wandb`` raised ``MissingConfigException`` on a
+    repository that had answered yes and installed the package. The config and the extra are therefore
+    asserted together, in both directions: rendered when enabled, and *absent* when not, so a name with no
+    package behind it never becomes selectable either.
+    """
+    dst = tmp_path / f"loggers_{enabled}"
+    slug = _render(dst, "supervised", **dict.fromkeys(OPTIONAL_LOGGERS, enabled))
+
+    group = dst / f"src/{slug}/configs/logger"
+    pyproject = (dst / "pyproject.toml").read_text()
+
+    assert (group / "csv.yaml").is_file(), "csv needs no service or credentials: it always ships"
+    for question, name in OPTIONAL_LOGGERS.items():
+        config, extra = group / f"{name}.yaml", f'{name} = ["{name}"'
+        assert config.is_file() is enabled, f"{question}={enabled} but {config.name} exists is {not enabled}"
+        assert (extra in pyproject) is enabled, f"{question}={enabled} disagrees with the {name} extra"
+
+    rendered = {p.name for p in group.iterdir()}
+    expected = {"csv.yaml"} | ({f"{n}.yaml" for n in OPTIONAL_LOGGERS.values()} if enabled else set())
+    assert rendered == expected, f"unexpected logger group contents: {sorted(rendered)}"
+
+    # Both answers also gate a branch in README.md.jinja, and the per-profile newline test above only ever
+    # renders the default (disabled) one.
+    assert not _bad_eof(dst), f"files not ending in exactly one newline: {_bad_eof(dst)}"
+
+
+@pytest.mark.render
+def test_logger_group_members_nest_under_their_own_name(tmp_path):
+    """Each logger config must be a mapping of *name → logger*, not a bare ``_target_``.
+
+    ``build_trainer`` calls ``instantiate_group``, which instantiates every ``_target_`` **child** of
+    ``cfg.logger``. A config whose ``_target_`` sits at the top level therefore contributes no logger at
+    all — and because ``instantiate_group`` returns ``[]`` for anything it does not recognise, the Trainer
+    is simply built with ``logger=False`` and the run succeeds having recorded nothing. That is precisely
+    the shape these files are adapted from (MEDS-EIC-AR nests its loggers one level deeper, under
+    ``trainer/logger/``), so it is the mistake a copy is most likely to reintroduce.
+    """
+    dst = tmp_path / "logger_shape"
+    slug = _render(dst, "supervised", use_wandb=True, use_mlflow=True)
+
+    for fp in sorted((dst / f"src/{slug}/configs/logger").glob("*.yaml")):
+        cfg = yaml.safe_load(fp.read_text())
+        assert "_target_" not in cfg, (
+            f"{fp.name}: `_target_` at the top level of a logger config builds no logger — nest it under "
+            f"a `{fp.stem}:` key, as instantiate_group expects"
+        )
+        assert set(cfg) == {fp.stem}, f"{fp.name} should declare exactly one logger, named {fp.stem}"
+        assert cfg[fp.stem]["_target_"].startswith("lightning.pytorch.loggers."), (
+            f"{fp.name}: a logger group member must target a Lightning logger"
+        )
 
 
 @pytest.mark.render

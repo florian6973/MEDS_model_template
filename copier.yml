@@ -139,12 +139,17 @@ implements_predict:
   default: true
   when: "{{ profile == 'custom' }}"
 
+# Logger options. Each renders `configs/logger/<name>.yaml` *and* the matching `pyproject.toml` extra, so
+# answering yes is what makes `logger=<name>` a valid override; answering no leaves `csv` the only member
+# of the group, and `logger=wandb` is then a Hydra composition error rather than a missing dependency.
+# `configs/logger/` is not in `_skip_if_exists`, so flipping an answer and re-running `copier update`
+# backfills the config later.
 use_wandb:
   type: bool
-  help: "Add a Weights & Biases logger option?"
+  help: "Render configs/logger/wandb.yaml + the `wandb` extra (needed to run `logger=wandb`)?"
   default: false
 
 use_mlflow:
   type: bool
-  help: "Add an MLflow logger option?"
+  help: "Render configs/logger/mlflow.yaml + the `mlflow` extra (needed to run `logger=mlflow`)?"
   default: false

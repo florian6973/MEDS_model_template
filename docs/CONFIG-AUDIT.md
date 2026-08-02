@@ -42,7 +42,11 @@ correctness gap.
 
 Three keys look inert and are not:
 
-- **`logger`** — group selection, but see §3: the only group member that exists is `csv`.
+- **`logger`** — group selection. Which members exist depends on the copier answers (`csv` always;
+  `wandb` / `mlflow` when asked for), and `instantiate_group` skips anything without a `_target_` child
+  rather than raising — so a malformed member logs nothing and the run still succeeds. The generated
+  repo's `test_every_rendered_logger_composes` and this repo's
+  `test_logger_group_members_nest_under_their_own_name` are what cover it.
 - **`callbacks`** — `instantiate_group` branches on the node being empty, not on its value. Benign, but
   note that dropping `model_checkpoint` silently changes which weights get published (see
   `_persist_checkpoint`, §2).
@@ -111,16 +115,24 @@ Not config-driven, but in the same blind spot and worth inspecting together:
 
 ## 3. Config surfaces that are broken or dangling
 
-**`use_wandb` / `use_mlflow` render no config.** Both `copier.yml` questions only add a `pyproject.toml`
-extra. There is no `configs/logger/wandb.yaml` or `mlflow.yaml` in the payload, so:
+**~~`use_wandb` / `use_mlflow` render no config.~~ Fixed.** Both `copier.yml` questions used to add only a
+`pyproject.toml` extra. With no `configs/logger/wandb.yaml` or `mlflow.yaml` in the payload:
 
 ```
 $ meds-model pretrain logger=wandb
 hydra.errors.MissingConfigException: In 'pretrain': Could not find 'logger/wandb'
 ```
 
-Answering "yes" buys a dependency and nothing to use it with. (MEDS-EIC-AR ships all three loggers under
-`configs/trainer/logger/`.) Either render the configs under `{% if use_wandb %}`, or drop the questions.
+Answering "yes" bought a dependency and nothing to use it with. Both configs are now rendered under
+`{% if use_wandb %}` / `{% if use_mlflow %}`, adapted from the ones MEDS-EIC-AR ships in
+`configs/trainer/logger/` — with one deliberate difference: this template's group members nest under their
+own name (`wandb:`), because `instantiate_group` reads the *children* of `cfg.logger`. A verbatim copy of
+MEDS-EIC-AR's file would compose fine and log nothing.
+
+Covered in both directions: `test_optional_loggers_render_with_their_extra` (config and extra appear
+together, and neither appears when the answer is no), `test_logger_group_members_nest_under_their_own_name`
+(the shape above), and, in a generated repo, `test_every_rendered_logger_composes` (`logger=<name>` for
+every rendered name, which is the `MissingConfigException` itself).
 
 **`pipeline` + `do_reshard=true` cannot work.** Inside a pipeline, MEDS-transforms resolves splits from
 the pipeline's *own* `input_dir` and from `train/` shard prefixes, so it never copies

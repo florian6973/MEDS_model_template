@@ -67,6 +67,35 @@ meds-model predict         input_data_dir=runs/data external_labels_dir=$LABELS_
 Any extra argument is a Hydra override, e.g.
 `meds-model supervised_train trainer.max_epochs=50 model.d_model=128`.
 
+### Logging
+
+`pretrain` and `supervised_train` take a `logger` config group; `configs/logger/<name>.yaml` is what makes
+`logger=<name>` valid, so **use these configs rather than constructing a logger in `model.py`** — a logger
+built there is invisible to `logger=`, and a name with no file is a Hydra composition error.
+{% if use_wandb or use_mlflow %}
+This repository ships {% if use_wandb and use_mlflow %}three{% else %}two{% endif %}:
+
+| `logger=` | Writes to | Needs |
+|---|---|---|
+| `csv` (default) | `${log_dir}/logs` | nothing |
+{% if use_wandb %}| `wandb` | the `{{ model_slug }}` W&B project | `uv sync --extra wandb`, then `wandb login` (or `WANDB_API_KEY`) |
+{% endif %}{% if use_mlflow %}| `mlflow` | `${log_dir}/mlflow/mlruns` | `uv sync --extra mlflow` |
+{% endif %}
+```bash
+{% if use_wandb %}meds-model pretrain logger=wandb logger.wandb.project=my-project
+{% else %}meds-model pretrain logger=mlflow logger.mlflow.experiment_name=my-experiment
+{% endif %}```
+
+`uv sync --all-extras` (the install step above) installs all of them at once.
+{% else %}
+Only `csv` is rendered here, because `use_wandb` and `use_mlflow` were both answered no. To add one, copy
+a config into `configs/logger/` and add its package to `[project.optional-dependencies]` — or re-render
+with `copier update` after flipping the answer in `.copier-answers.yml`.
+{% endif %}
+A logger group member is a mapping of *name → logger config*: `build_trainer` instantiates every
+`_target_` child of `cfg.logger`, so one file can enable several loggers at once, and a file with a bare
+top-level `_target_` enables none of them without failing.
+
 ### Two rules worth knowing
 
 **Sources are alternatives, not layers.** `supervised_train` and `predict` each accept several optional

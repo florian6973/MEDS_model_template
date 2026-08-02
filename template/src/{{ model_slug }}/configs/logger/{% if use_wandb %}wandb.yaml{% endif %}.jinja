@@ -1,0 +1,23 @@
+# Weights & Biases. Rendered because this repository answered yes to `use_wandb`; select it with
+# `meds-model pretrain logger=wandb`. Adapted from MEDS-EIC-AR's `configs/trainer/logger/wandb.yaml`.
+#
+# Needs the extra it comes with (`uv sync --extra wandb`) and credentials (`wandb login`, or WANDB_API_KEY)
+# — neither is checked until Lightning builds the logger, which is at the start of a training run.
+#
+# The `wandb:` key is load-bearing. `build_trainer` instantiates every `_target_` *child* of `cfg.logger`,
+# so a bare `_target_` at the top level builds no logger at all — silently, with the run still succeeding.
+wandb:
+  _target_: lightning.pytorch.loggers.WandbLogger
+  save_dir: ${log_dir}
+  project: {{ model_slug }}
+  name: null # run name; wandb generates one when null
+  id: null # set to resume a previous run
+  # Forwarded to `wandb.init` rather than consumed by Lightning, so anything it takes works here.
+  group: null
+  job_type: null
+  tags: [] # e.g. ["${hydra:runtime.choices.model}"] to tag runs by the model config they used
+  prefix: "" # prepended to every metric key
+  offline: false # true logs to disk only, for a machine with no network
+  log_model: false # true uploads checkpoints as wandb artifacts
+  anonymous: null
+  # entity: "" # your wandb team, if the run should not go to your personal account

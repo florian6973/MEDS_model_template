@@ -30,16 +30,25 @@ jobs:
       fail-fast: false
       matrix:
         profile: [supervised, probe, zero_shot_materialized, packaged]
+        # The optional loggers are rendered from copier answers, so the default matrix only ever composes
+        # `logger=csv`. One extra entry turns both on: `test_every_rendered_logger_composes` is then the
+        # job that would catch `logger=wandb` raising MissingConfigException again.
+        loggers: [false]
+        include:
+          - profile: supervised
+            loggers: true
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
-      - name: Render the ${{ matrix.profile }} DAG
+      - name: Render the ${{ matrix.profile }} DAG (loggers=${{ matrix.loggers }})
         run: |
           uvx copier copy --vcs-ref=HEAD --defaults --trust \
             --data model_slug=demo_model --data model_name="Demo Model" \
-            --data profile=${{ matrix.profile }} . /tmp/demo_model
+            --data profile=${{ matrix.profile }} \
+            --data use_wandb=${{ matrix.loggers }} --data use_mlflow=${{ matrix.loggers }} \
+            . /tmp/demo_model
       - name: Install torch (CPU) + run the generated repo's tests
         working-directory: /tmp/demo_model
         run: |
