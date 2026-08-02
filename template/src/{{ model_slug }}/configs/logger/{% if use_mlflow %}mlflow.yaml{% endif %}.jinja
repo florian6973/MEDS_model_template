@@ -1,0 +1,17 @@
+# MLflow. Rendered because this repository answered yes to `use_mlflow`; select it with
+# `meds-model pretrain logger=mlflow`. Adapted from MEDS-EIC-AR's `configs/trainer/logger/mlflow.yaml`.
+#
+# Needs the extra it comes with (`uv sync --extra mlflow`). The default tracking URI is a local directory,
+# so nothing else has to be running; point `tracking_uri` at a server to log remotely instead.
+#
+# The `mlflow:` key is load-bearing. `build_trainer` instantiates every `_target_` *child* of `cfg.logger`,
+# so a bare `_target_` at the top level builds no logger at all — silently, with the run still succeeding.
+mlflow:
+  _target_: lightning.pytorch.loggers.MLFlowLogger
+  experiment_name: {{ model_slug }}
+  run_name: null
+  tracking_uri: ${log_dir}/mlflow/mlruns # `mlflow ui` inside ${log_dir}/mlflow opens the UI on it
+  tags: null
+  prefix: "" # prepended to every metric key
+  artifact_location: null
+  # run_id: "" # set to resume logging into an existing run

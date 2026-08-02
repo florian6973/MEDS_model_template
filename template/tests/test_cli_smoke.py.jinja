@@ -5,12 +5,25 @@ Also pins the two properties the dispatcher is responsible for: it lists exactly
 and it refuses an unsupported one instead of failing somewhere deeper.
 """
 import subprocess
+from importlib.resources import files
 
 import pytest
 
 from meds_model_base.commands import CommandName
 
 from {{ model_slug }}.commands import COMMANDS
+
+#: The commands that compose a `logger` group. The rest build no Trainer, so they take no logger.
+LOGGING_COMMANDS = sorted({"pretrain", "supervised_train"} & {c.value for c in COMMANDS})
+
+#: Every member of the logger group this repository actually rendered. `csv` is always present; `wandb`
+#: and `mlflow` only if the matching copier question was answered yes. Discovered rather than hardcoded,
+#: because the answers are what decides.
+LOGGERS = sorted(
+    p.name.removesuffix(".yaml")
+    for p in files("{{ model_slug }}").joinpath("configs/logger").iterdir()
+    if p.name.endswith(".yaml")
+)
 
 
 def test_commands_lists_supported():
@@ -30,3 +43,31 @@ def test_unsupported_command_fails_clearly(command):
     result = subprocess.run(["meds-model", command], capture_output=True, text=True)
     assert result.returncode != 0
     assert "does not support" in (result.stdout + result.stderr)
+
+
+def test_csv_logger_is_always_available():
+    """`csv` needs no service and no credentials, so it is the one logger every repository can run."""
+    assert "csv" in LOGGERS
+
+
+@pytest.mark.parametrize("logger", LOGGERS)
+@pytest.mark.parametrize("command", LOGGING_COMMANDS)
+def test_every_rendered_logger_composes(command, logger):
+    """`logger=<name>` must compose for every name in the group — the whole point of rendering the file.
+
+    A logger option that exists only as a `pyproject.toml` extra fails at *composition*, before anything
+    runs::
+
+        $ meds-model pretrain logger=wandb
+        hydra.errors.MissingConfigException: In 'pretrain': Could not find 'logger/wandb'
+
+    `--cfg job` composes and prints instead of training, so this stays a smoke test: it needs no model, no
+    data, and not even the logger's own package installed (nothing is instantiated). What it pins is that
+    the group member exists and lands under `logger.<name>` — the nesting `build_trainer` requires, and the
+    one thing a config copied from another project silently gets wrong.
+    """
+    result = subprocess.run(
+        ["meds-model", command, f"logger={logger}", "--cfg", "job"], capture_output=True, text=True
+    )
+    assert result.returncode == 0, result.stderr
+    assert f"  {logger}:" in result.stdout, f"logger={logger} composed without a `logger.{logger}` node"
