@@ -13,9 +13,6 @@ output_data_dir: ${data_dir}
 pipeline: null
 pipeline_overrides: []
 
-#: Required unless the input is already sharded by split (it usually is not).
-do_reshard: true
-
 #: Artifacts are immutable; set true to replace an existing patients/ directory.
 do_overwrite: false
 
