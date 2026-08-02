@@ -82,12 +82,19 @@ class DefaultPreprocessDataCommand(PreprocessDataCommand):
 
     @staticmethod
     def _run_meds_transforms(pipeline: str, input_dir: Path, output_dir: Path, cfg: DictConfig) -> None:
-        """Run a MEDS-transforms pipeline YAML, overriding its input/output dirs."""
+        """Run a MEDS-transforms pipeline YAML, overriding its input/output dirs.
+
+        ``MEDS_transform-pipeline`` is argparse, not Hydra: it takes the pipeline YAML positionally and
+        every Hydra-style override after a single ``--overrides`` flag. Bare ``k=v`` positionals are an
+        argparse error (exit 2, before any stage runs), so the flag is load-bearing — without it
+        ``preprocess_data pipeline=...`` fails for every pipeline.
+        """
         extra = list(cfg.get("pipeline_overrides", []) or [])
         run_streamed(
             [
                 "MEDS_transform-pipeline",
                 str(pipeline),
+                "--overrides",
                 f"input_dir={input_dir}",
                 f"output_dir={output_dir}",
                 *extra,
