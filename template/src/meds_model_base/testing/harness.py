@@ -61,7 +61,6 @@ def build_workspace(meds_root: Path, workspace: Path) -> Path:
             "preprocess_data",
             f"external_meds_dir={meds_root}",
             f"output_data_dir={workspace}",
-            "do_reshard=true",
             "do_overwrite=true",
         ]
     )

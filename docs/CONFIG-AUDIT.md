@@ -73,7 +73,6 @@ These are the ones that matter. "Branch" column gives the exact site.
 | `seed` | pretrain, supervised_train | `train.py:58`, `train.py:217` | `null` skips `seed_everything` entirely | ✗ | ✗ |
 | `splits` | infer, predict | `_runtime.py:175-177` | accepts `null` / a bare string / a list | ✗ | list only |
 | `input_*_dir` sources | supervised_train, predict | arbitration in `commands/base.py` | selects the source artifact; two is an error, wrong type is an error | ✓ | two-source ✓, wrong-type ✗ |
-| `do_reshard` | preprocess_data | no template branch; selects a different **MTD** pipeline | `false` skips `reshard_to_split`, requiring split-sharded input | ✗ | `true` only, and only on pre-sharded data |
 | `input_data_dir: null` | predict | `_runtime.py:74` | recovers the workspace from the source artifact's manifest | ✓ | ✓ (MEDS-DEV e2e) |
 | `do_overwrite` | all | `manifest.py:346` | replace an existing artifact instead of refusing | ✗ | ✓ |
 
@@ -134,30 +133,40 @@ together, and neither appears when the answer is no), `test_logger_group_members
 (the shape above), and, in a generated repo, `test_every_rendered_logger_composes` (`logger=<name>` for
 every rendered name, which is the `MissingConfigException` itself).
 
-**`pipeline` + `do_reshard=true` cannot work.** Inside a pipeline, MEDS-transforms resolves splits from
-the pipeline's *own* `input_dir` and from `train/` shard prefixes, so it never copies
-`metadata/subject_splits.parquet` between stages — and its output carries none.
-`MTD_preprocess`'s `reshard_to_split` needs one, so the default `do_reshard=true` fails immediately
-after the pipeline succeeds. The rule is conditional, not a global precondition:
+**`do_reshard` is gone; split-sharded input is a precondition.** ~~`pipeline` + `do_reshard=true` cannot
+work.~~ Inside a pipeline, MEDS-transforms resolves splits from the pipeline's *own* `input_dir` and from
+`train/` shard prefixes, so it never copies `metadata/subject_splits.parquet` between stages — and its
+output carries none. `MTD_preprocess`'s `reshard_to_split` needs one, so `do_reshard=true` could only ever
+fail, and always *after* the pipeline had run.
 
-- no `pipeline` → `do_reshard=true` is correct, and is what makes raw MEDS work;
-- with `pipeline` → `do_reshard=false`, and the pipeline output must be split-sharded, either because
-  its input was (pipelines preserve shard layout) or because the pipeline starts with `reshard_to_split`.
+Resolved by removing the key rather than guarding the combination. `preprocess_data` now refuses input
+that is not sharded by split, up front and with the resharding command to run, and always calls MTD with
+`do_reshard=false`. That is the one rule which holds with and without a `pipeline`, and it is already the
+layout `meds-dev-dataset` and the standard MEDS ETL produce — verified against a real `meds-dev-dataset`
+build, whose `data/` is `train/0.parquet`, `tuning/0.parquet`, `held_out/0.parquet`.
 
-Worth a guard that raises on the impossible combination rather than failing minutes in.
+The premise of the old note was wrong, incidentally: `preprocess_data`'s docstring called non-split-sharded
+input "the common case", and no dataset reachable through MEDS-DEV is.
 
-**A filtering pipeline desynchronises the published split table.** `_preserve_subject_splits` copies from
-`external_meds_dir` — the *original* dataset — so if the pipeline dropped subjects, `patients/` claims
-subjects its tokenization does not contain. Measured on the synthetic dataset with
-`filter_subjects(min_events_per_subject=8)`: 280 subjects in, 145 survive, 280 published; `preprocess_data`,
-`pretrain` and `supervised_train` all succeed, then `predict` fails with `CoverageError` — an accurate
-guard pointing at the wrong culprit, two training runs too late. Publishing the intersection with the
-tokenized cohort (and failing on an empty split) makes the artifact self-consistent by construction.
+**~~A filtering pipeline desynchronises the published split table.~~** `_preserve_subject_splits` copies
+from `external_meds_dir` — the *original* dataset — so a pipeline that dropped subjects left `patients/`
+claiming subjects its tokenization does not contain; `preprocess_data`, `pretrain` and `supervised_train`
+all succeeded, then `predict` failed with `CoverageError`, an accurate guard pointing at the wrong culprit
+two training runs too late.
 
-**The default `do_reshard` path is untested on the data shape it exists for.** The rendered tests use
-`SIMPLE_STATIC_SHARDED_BY_SPLIT_WITH_TASKS`, which is already sharded by split. `preprocess_data`'s own
-docstring says non-split-sharded input "is the common case" and is the reason `do_reshard=true` is the
-default — that case has never run in CI.
+Resolved in two places. `restrict_to_cohort` filters materialized labels down to the subjects present in
+`tokenization/schemas/<split>/`, which is where meds-torch-data itself reads split membership — so
+`n_expected` is already correct when `predict` counts. `_describe_cohort` now counts the tensorized output
+rather than the source dataset, so the manifest records the cohort the artifact actually holds.
+
+Measured end to end on the MIMIC-IV demo (100 subjects, 80/10/10) with
+`filter_subjects(min_events_per_subject=500)`: 51 subjects survive, the manifest records 43/4/4, and real
+`meds-dev-task` labels lose 11 rows with a warning naming the pipeline as the cause.
+
+The table itself is still published and still needed — `meds-dev-task` output takes the shard branch of
+`read_labels`, which partitions from it. Its remaining second job is diagnostic: a labelled subject absent
+from *both* the table and the cohort means the labels are for another dataset, which is worth
+distinguishing from one the pipeline merely dropped.
 
 ## 4. Full key inventory per command
 
@@ -165,7 +174,7 @@ For seeing the whole surface at once. `???` = required, no default.
 
 | command | keys |
 |---|---|
-| `preprocess_data` | `external_meds_dir ???`, `output_data_dir`, **`pipeline`**, **`pipeline_overrides`**, **`do_reshard`**, `do_overwrite` |
+| `preprocess_data` | `external_meds_dir ???`, `output_data_dir`, **`pipeline`**, **`pipeline_overrides`**, `do_overwrite` |
 | `pretrain` | `input_data_dir`, `output_pretrained_model_dir`, `max_seq_len`, `batch_size`, `num_workers`, **`seed`**, `do_overwrite`, **`do_resume`**, **`work_dir`**, **`clean_work_dir`** |
 | `supervised_train` | the `pretrain` keys, plus `external_labels_dir ???`, `output_supervised_model_dir`, `input_pretrained_model_dir`, `input_inference_subdir` |
 | `infer` | `input_data_dir`, `input_pretrained_model_dir`, `output_inference_subdir`, `external_labels_dir ???`, **`splits`**, `max_seq_len`, `batch_size`, `num_workers`, `do_overwrite` |
@@ -179,7 +188,7 @@ Not in `tests/` at the template root — those render a repo and inspect it stat
 or execute one. The rendered conformance suite (`template/tests/`) is the only tier that runs real
 commands, and it runs in the `rendered-smoke` CI job.
 
-`preprocess_data` needs no torch, so `pipeline` / `do_reshard` coverage is cheap there. The `do_resume`
+`preprocess_data` needs no torch, so `pipeline` coverage is cheap there. The `do_resume`
 family needs a training run, so it belongs alongside `test_smoke_pipeline.py`.
 
 ## 6. Documentation gap, separately
