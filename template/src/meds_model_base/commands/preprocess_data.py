@@ -8,8 +8,11 @@ Both stages are shelled out (they are Hydra applications with their own console 
 so long runs show progress. The result is published atomically as ``<output_data_dir>/patients``: either the
 directory exists and is complete, or it does not exist at all.
 
-``do_reshard=True`` is required when the input is not already sharded by split, which is the common case;
-without it MTD raises "No schema files found".
+**The input must already be sharded by split** (``data/train/…``, ``data/tuning/…``, ``data/held_out/…``).
+That is what ``meds-dev-dataset`` and the standard MEDS ETL produce, and it is the only layout from which
+meds-torch-data can recover split membership: it reads the shard path and never opens
+``subject_splits.parquet``. Input sharded another way is refused up front, with the resharding command to
+run, rather than failing several minutes in.
 """
 
 from __future__ import annotations
@@ -21,7 +24,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from ..manifest import ArtifactType, input_ref, write_artifact
-from ..schemas import code_metadata_filepath, subject_splits_filepath
+from ..schemas import SPLITS, code_metadata_filepath, subject_splits_filepath
 from .base import PreprocessDataCommand
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -47,8 +50,11 @@ class DefaultPreprocessDataCommand(PreprocessDataCommand):
         external_meds_dir = Path(cfg.external_meds_dir)
         data_dir = Path(cfg.output_data_dir)
         patients_dir = data_dir / PATIENTS_SUBDIR
-        do_reshard = bool(cfg.get("do_reshard", True))
         pipeline = cfg.get("pipeline")
+
+        # Before the artifact is staged and long before a pipeline runs: this is the one precondition
+        # whose violation is otherwise reported by MTD, several minutes in and in its own vocabulary.
+        _require_split_sharded(external_meds_dir, "external_meds_dir")
 
         with write_artifact(
             patients_dir,
@@ -63,16 +69,17 @@ class DefaultPreprocessDataCommand(PreprocessDataCommand):
             if pipeline:
                 intermediate = staging.parent / f"{staging.name}.transforms"
                 self._run_meds_transforms(pipeline, external_meds_dir, intermediate, cfg)
+                # MEDS-transforms preserves shard layout, so this holds for any pipeline that does not
+                # deliberately reshard. Checking anyway costs a directory listing and turns "MTD found no
+                # schema files" back into a statement about the pipeline that actually caused it.
+                _require_split_sharded(intermediate, "the pipeline output")
                 mtd_input = intermediate
 
-            self._run_mtd(mtd_input, staging, do_reshard=do_reshard)
+            self._run_mtd(mtd_input, staging)
             _validate_tensorized(staging)
 
             extras["source"] = {"external_meds_dir": str(external_meds_dir)}
-            extras["tensorization"] = {
-                "do_reshard": do_reshard,
-                "pipeline": str(pipeline) if pipeline else None,
-            }
+            extras["tensorization"] = {"pipeline": str(pipeline) if pipeline else None}
             extras.update(_describe_cohort(external_meds_dir, staging))
 
         logger.info("Patient data ready at %s.", patients_dir)
@@ -102,17 +109,67 @@ class DefaultPreprocessDataCommand(PreprocessDataCommand):
         )
 
     @staticmethod
-    def _run_mtd(input_dir: Path, output_dir: Path, *, do_reshard: bool) -> None:
-        """Run meds-torch-data tensorization (``MTD_preprocess``) into the staging directory."""
+    def _run_mtd(input_dir: Path, output_dir: Path) -> None:
+        """Run meds-torch-data tensorization (``MTD_preprocess``) into the staging directory.
+
+        ``do_reshard=false`` always, passed explicitly rather than left to MTD's default so the invariant
+        is legible at the call site. Resharding here was the source of an impossible combination:
+        ``reshard_to_split`` reads ``metadata/subject_splits.parquet`` from *its own* input, and a
+        MEDS-transforms pipeline does not carry that file through — so ``pipeline`` with resharding could
+        only ever fail, and always after the pipeline had already run. Requiring split-sharded input
+        removes the combination rather than guarding it.
+        """
         run_streamed(
             [
                 "MTD_preprocess",
                 f"MEDS_dataset_dir={input_dir}",
                 f"output_dir={output_dir}",
-                f"do_reshard={do_reshard}",
+                "do_reshard=false",
                 "do_overwrite=true",
             ],
             stage="MTD_preprocess",
+        )
+
+
+def _require_split_sharded(meds_dir: Path, what: str) -> None:
+    """Refuse MEDS input that is not sharded by split.
+
+    meds-torch-data recovers split membership from the shard path and from nothing else — its dataset
+    keeps a shard only when the name starts with ``f"{split}/"``. Input sharded any other way tensorizes
+    into an artifact with no splits at all, which surfaces as MTD's "No schema files found" long after the
+    cause.
+
+    This is a precondition rather than something to fix by resharding here, because resharding *here* is
+    what could not be made to work: it needs ``metadata/subject_splits.parquet`` in its own input, and a
+    MEDS-transforms pipeline drops that file. Requiring the layout up front is the only rule that holds
+    with and without a ``pipeline``, and it is already what ``meds-dev-dataset`` and the standard MEDS ETL
+    produce.
+    """
+    data_dir = meds_dir / "data"
+    shards = [
+        p
+        for p in sorted(data_dir.rglob("*.parquet"))
+        if not any(part.startswith(".") for part in p.relative_to(data_dir).parts)
+    ]
+    if not shards:
+        raise FileNotFoundError(f"No MEDS data shards under {data_dir}; {what} is not a MEDS dataset.")
+
+    stray = sorted({p.relative_to(data_dir).parts[0] for p in shards} - set(SPLITS))
+    if stray:
+        listed = ", ".join(stray[:5]) + (" …" if len(stray) > 5 else "")
+        raise ValueError(
+            f"{what} at {meds_dir} is not sharded by split: data/ contains {listed}, but every shard "
+            f"must sit under one of {'/'.join(SPLITS)}/. meds-torch-data reads split membership from the "
+            "shard path alone, so this input cannot be tensorized into a usable artifact.\n\n"
+            "Reshard it first with a one-stage MEDS-transforms pipeline:\n\n"
+            "    # reshard.yaml\n"
+            f"    input_dir: {meds_dir}\n"
+            "    output_dir: /path/to/split_sharded\n"
+            "    stages:\n"
+            "      - reshard_to_split\n\n"
+            "    MEDS_transform-pipeline reshard.yaml\n\n"
+            "then point external_meds_dir at the output. A pipeline= that already starts with "
+            "reshard_to_split does the same job in one pass."
         )
 
 
@@ -126,8 +183,9 @@ def _validate_tensorized(output_dir: Path) -> None:
     schemas = list((output_dir / "tokenization" / "schemas").glob("*/*.parquet"))
     if not schemas:
         raise FileNotFoundError(
-            f"No tokenization schema files under {output_dir}/tokenization/schemas. If the input was not "
-            "split-sharded, re-run preprocess_data with do_reshard=True."
+            f"No tokenization schema files under {output_dir}/tokenization/schemas. The input passed "
+            "the split-sharding check, so tensorization itself produced nothing — check "
+            "MTD_preprocess's output above."
         )
 
 

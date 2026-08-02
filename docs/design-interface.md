@@ -28,7 +28,15 @@ Arguments prefixed with `external_` identify artifacts supplied from outside the
 
 ### `external_meds_dir`
 
-Canonical MEDS dataset with existing subject splits.
+Canonical MEDS dataset, **sharded by split**:
+
+```text
+data/train/0.parquet
+data/tuning/0.parquet
+data/held_out/0.parquet
+metadata/codes.parquet
+metadata/subject_splits.parquet
+```
 
 Expected splits:
 
@@ -37,6 +45,21 @@ train
 tuning
 held_out
 ```
+
+The shard layout is a precondition, not a preference, and `preprocess_data` refuses input without it.
+meds-torch-data recovers split membership from the shard path and never opens `subject_splits.parquet`,
+so a dataset sharded another way tensorizes into an artifact with no splits at all.
+
+This is what `meds-dev-dataset` and the standard MEDS ETL produce, so nothing reachable through MEDS-DEV
+needs any preparation. Anything else is resharded upstream with a one-stage MEDS-transforms pipeline
+(`reshard_to_split`); the error names the pipeline to run. Resharding cannot be done on the caller's
+behalf during `preprocess_data`, because `reshard_to_split` reads `metadata/subject_splits.parquet` from
+its own input and a MEDS-transforms `pipeline:` does not carry that file through — so the two could never
+be combined.
+
+`metadata/subject_splits.parquet` is required of the source dataset (MEDS requires it, and it is what
+resharding consumes), but it is *not* copied into `patients/`. The published artifact records split
+membership as its shard layout, which is the same place meds-torch-data reads it from.
 
 ### `external_labels_dir`
 

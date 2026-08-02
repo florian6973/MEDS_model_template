@@ -18,7 +18,7 @@ Five commands form a DAG, not a fixed pipeline. Run `meds-model commands` to see
 
 | Command | Reads | Writes |
 |---|---|---|
-| `preprocess_data` | an external MEDS dataset | `<data_dir>/patients/` |
+| `preprocess_data` | an external MEDS dataset, sharded by split | `<data_dir>/patients/` |
 | `pretrain` | patient data | a pretrained model directory |
 | `infer` | patient data + a pretrained model + `external_labels_dir` | `<data_dir>/inference/<name>/` |
 | `supervised_train` | patient data + `external_labels_dir` (+ at most one prior artifact) | a supervised model directory |
@@ -28,6 +28,24 @@ Five commands form a DAG, not a fixed pipeline. Run `meds-model commands` to see
 sibling subdirectory. Every artifact directory carries a `manifest.yaml` recording
 what produced it and from which inputs, and is published atomically — so a directory that exists is a
 directory that finished.
+
+### The input dataset must be sharded by split
+
+`external_meds_dir` must look like `data/train/…`, `data/tuning/…`, `data/held_out/…`. That is what
+`meds-dev-dataset` and the standard MEDS ETL produce, so a dataset from MEDS-DEV needs no preparation.
+Anything else is refused up front, with the resharding pipeline to run printed in the error.
+
+The reason is that meds-torch-data reads split membership from the shard path and nothing else, so this
+layout is the only one it can tensorize into an artifact that still knows its splits. It is also why
+`patients/` carries no `subject_splits.parquet`: split membership travels as the shard layout, and a
+second copy could only ever disagree with it.
+
+That matters if you use `pipeline=`. A MEDS-transforms pipeline that filters subjects — `filter_subjects`,
+or a `filter_measurements` aggressive enough to empty a timeline — tokenizes them away, and their labels
+are then dropped to match. `preprocess_data` warns and records `dropped_by_pipeline` in the manifest when
+it happens. **Your evaluation then covers fewer subjects than the task defines, and nothing downstream can
+tell**: `meds-dev-evaluation` only ever sees the predictions file. If you are comparing numbers against
+another model, that difference belongs in your write-up.
 
 ## Usage
 
