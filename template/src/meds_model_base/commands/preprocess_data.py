@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import logging
 import os
-import shutil
 import subprocess
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -67,7 +66,6 @@ class DefaultPreprocessDataCommand(PreprocessDataCommand):
                 mtd_input = intermediate
 
             self._run_mtd(mtd_input, staging, do_reshard=do_reshard)
-            _preserve_subject_splits(external_meds_dir, staging)
             _validate_tensorized(staging)
 
             extras["source"] = {"external_meds_dir": str(external_meds_dir)}
@@ -118,25 +116,6 @@ class DefaultPreprocessDataCommand(PreprocessDataCommand):
         )
 
 
-def _preserve_subject_splits(meds_dir: Path, staging: Path) -> None:
-    """Copy the subject-split table into the published artifact.
-
-    meds-torch-data does not carry it through tensorization, and every command that materializes labels
-    needs it to partition them. Copying it here (a few KB) is what makes ``patients/`` self-contained:
-    nothing downstream has to know where the raw dataset was, or whether it still exists.
-    """
-    src = meds_dir / subject_splits_filepath
-    if not src.is_file():
-        raise FileNotFoundError(
-            f"No subject splits at {src}. A canonical MEDS dataset must define train/tuning/held_out "
-            "splits; without them labels cannot be partitioned for training."
-        )
-    dst = staging / subject_splits_filepath
-    dst.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(src, dst)
-    logger.info("Copied subject splits into the patients artifact.")
-
-
 def _validate_tensorized(output_dir: Path) -> None:
     """Check the invariants a bare schema ``validate()`` misses, before the artifact is published."""
     codes_fp = output_dir / code_metadata_filepath
@@ -153,17 +132,40 @@ def _validate_tensorized(output_dir: Path) -> None:
 
 
 def _describe_cohort(meds_dir: Path, tensorized: Path) -> dict:
-    """Best-effort cohort statistics for the manifest (subjects per split, vocabulary size)."""
+    """Cohort statistics for the manifest, counted from the tensorized output.
+
+    Counting the *artifact* rather than ``external_meds_dir`` is what makes a filtering ``pipeline``
+    visible: these numbers now describe what the artifact holds, not what preprocessing was handed.
+
+    ``dropped_by_pipeline`` is the difference, recorded here because here is the only place both sides
+    exist at once. Nothing downstream needs it — labels are partitioned from the tokenized cohort, so a
+    subject the pipeline removed is dropped by construction. It is recorded so that a user who later
+    wonders why their label count fell can find the answer in the artifact that caused it, rather than
+    inferring it from a warning several commands later.
+    """
     import polars as pl
 
+    from ..tasks import tokenized_cohort
+
     described: dict = {}
+    cohort = tokenized_cohort(tensorized)
+    if cohort:
+        described["splits"] = {split: len(subjects) for split, subjects in sorted(cohort.items())}
+
     splits_fp = meds_dir / subject_splits_filepath
     if splits_fp.is_file():
-        splits = pl.read_parquet(splits_fp)
-        described["splits"] = {
-            row["split"]: row["n"]
-            for row in splits.group_by("split").agg(pl.len().alias("n")).sort("split").to_dicts()
-        }
+        n_source = pl.read_parquet(splits_fp).height
+        n_tokenized = sum(len(s) for s in cohort.values())
+        if n_tokenized < n_source:
+            described["dropped_by_pipeline"] = n_source - n_tokenized
+            logger.warning(
+                "Preprocessing dropped %d of %d subjects (%d tokenized). Labels for them will be "
+                "dropped downstream; this is expected when the pipeline filters subjects.",
+                n_source - n_tokenized,
+                n_source,
+                n_tokenized,
+            )
+
     codes_fp = tensorized / code_metadata_filepath
     if codes_fp.is_file():
         described["vocabulary_size"] = pl.read_parquet(codes_fp).height
