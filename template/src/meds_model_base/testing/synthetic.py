@@ -32,6 +32,32 @@ _BASE_TIME = datetime(2020, 1, 1)
 #: Fixed programs for a generative "pattern" dataset (a tiny grammar; cf. MEDS-EIC-AR).
 PATTERN_PROGRAMS = {"A": ("P//A0", "P//A1", "P//A2"), "B": ("P//B0", "P//B1")}
 
+#: Static (baseline) measurements every synthetic subject gets: one value-less code drawn from
+#: :data:`STATIC_GROUPS` and one numeric :data:`STATIC_NUMERIC`. Both branches of a model's static handling
+#: are therefore covered, and a cohort built here is a cohort meds-torch-data can collate under
+#: ``static_inclusion_mode: INCLUDE``.
+STATIC_GROUPS = ("BASELINE//GROUP_A", "BASELINE//GROUP_B")
+STATIC_NUMERIC = "BASELINE//AGE"
+STATIC_CODES = (*STATIC_GROUPS, STATIC_NUMERIC)
+
+
+def _static_rows(subject_id: int, rng: random.Random) -> list[dict]:
+    """Static measurements for one subject: MEDS marks them with a null ``time``.
+
+    ``rng`` must be independent of the generator that decides the labels. A static that correlated with the
+    outcome would be a second signal, which would make the designed-signal test pass for the wrong reason
+    and give the negative control something real to learn.
+    """
+    return [
+        {"subject_id": subject_id, "time": None, "code": rng.choice(STATIC_GROUPS), "numeric_value": None},
+        {
+            "subject_id": subject_id,
+            "time": None,
+            "code": STATIC_NUMERIC,
+            "numeric_value": rng.uniform(20.0, 90.0),
+        },
+    ]
+
 
 def _write_meds(
     root: Path,
@@ -82,6 +108,7 @@ def build_signal_dataset(
     signal_rate: float = 0.5,
     seed: int = 0,
     shuffle_labels: bool = False,
+    with_statics: bool = True,
 ) -> Path:
     """Write a classifier-signal MEDS dataset: the presence of :data:`SIGNAL_CODE` determines the label.
 
@@ -91,13 +118,24 @@ def build_signal_dataset(
     control: nothing to learn, AUROC ≈ 0.5).
 
     **Only the signal code is informative.** Sequence length and the signal's position within the sequence
-    are both label-independent by construction; see the comment in the loop for why that matters.
+    are both label-independent by construction; see the comment in the loop for why that matters. The
+    static measurements are drawn from a separate generator for the same reason.
+
+    ``with_statics`` (default on) gives every subject the baseline measurements described by
+    :data:`STATIC_CODES`. It defaults on because a cohort *without* them is not merely a simpler cohort: a
+    model whose datamodule sets ``static_inclusion_mode: INCLUDE`` cannot collate it at all —
+    meds-torch-data raises ``ValueError: Cannot infer dtype from empty values`` when the static tensors are
+    empty for a whole batch, before the model is ever called. A learnability suite that cannot exercise a
+    model's static path is not testing that model. Turn it off only to reproduce that case.
 
     Returns ``root`` (a MEDS dataset with a ``signal_task`` task-labels directory).
     """
     rng = random.Random(seed)
+    # Independent of `rng`, so nothing about a subject's baseline variables can carry information about
+    # its label — the signal code stays the only thing there is to learn.
+    static_rng = random.Random(seed + 9973)
     counts = {train_split: n_train, tuning_split: n_tuning, held_out_split: n_held_out}
-    codes = [*_BACKGROUND, SIGNAL_CODE]
+    codes = [*_BACKGROUND, SIGNAL_CODE, *(STATIC_CODES if with_statics else ())]
 
     per_split: dict[str, list[dict]] = {}
     task_labels: dict[str, pl.DataFrame] = {}
@@ -106,6 +144,9 @@ def build_signal_dataset(
         rows: list[dict] = []
         labels: list[dict] = []
         for _ in range(n):
+            if with_statics:
+                # MEDS puts a subject's static measurements first, marked by a null time.
+                rows.extend(_static_rows(subject_id, static_rng))
             has_signal = rng.random() < signal_rate
             t = _BASE_TIME + timedelta(days=int(rng.random() * 100))
             # The signal is *inserted at a random position* and a negative subject gets a filler event, so
@@ -150,16 +191,30 @@ def build_signal_dataset(
 
 
 def build_pattern_dataset(
-    root: Path, *, n_train: int = 200, n_tuning: int = 40, n_held_out: int = 40, seed: int = 0
+    root: Path,
+    *,
+    n_train: int = 200,
+    n_tuning: int = 40,
+    n_held_out: int = 40,
+    seed: int = 0,
+    with_statics: bool = True,
 ) -> Path:
     """Write a generative-signal MEDS dataset: each subject is a run of fixed code *programs*.
 
     Used to test autoregressive generation: a model that learns the grammar should generate valid programs.
     Also emits a ``pattern_task`` index (one prediction_time per subject) for the generation entry point.
+
+    ``with_statics`` carries the same meaning and the same default as in :func:`build_signal_dataset`: the
+    baseline measurements are what makes the cohort collatable under ``static_inclusion_mode: INCLUDE``.
+    They are not part of the grammar and are never emitted into the dynamic sequence, so a model generating
+    programs does not have to generate them.
     """
     rng = random.Random(seed)
+    static_rng = random.Random(seed + 9973)
     counts = {train_split: n_train, tuning_split: n_tuning, held_out_split: n_held_out}
     codes = sorted({c for prog in PATTERN_PROGRAMS.values() for c in prog})
+    if with_statics:
+        codes += list(STATIC_CODES)
 
     per_split: dict[str, list[dict]] = {}
     task_labels: dict[str, pl.DataFrame] = {}
@@ -168,6 +223,8 @@ def build_pattern_dataset(
         rows: list[dict] = []
         labels: list[dict] = []
         for _ in range(n):
+            if with_statics:
+                rows.extend(_static_rows(subject_id, static_rng))
             t = _BASE_TIME + timedelta(days=int(rng.random() * 100))
             seq: list[str] = []
             for _ in range(rng.randint(3, 6)):
