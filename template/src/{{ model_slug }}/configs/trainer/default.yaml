@@ -5,3 +5,17 @@ devices: 1
 log_every_n_steps: 1
 gradient_clip_val: 1.0
 enable_progress_bar: false
+
+#: Determinism. `warn` asks for deterministic kernels and warns where none exists, rather than killing the
+#: run; `benchmark: false` stops cuDNN picking algorithms by timing. With `seed`, these give the claim the
+#: porting procedure asks you to make: same seed + same config + same environment -> same metric. For a
+#: hard guarantee use `trainer.deterministic=true`, which raises instead of warning.
+deterministic: warn
+benchmark: false
+
+#: Full fp32, which is torch's own default — this repository does not quietly trade precision for speed.
+#: Listed explicitly so `trainer.precision=bf16-mixed` composes without Hydra's `+` (configs are struct
+#: mode) and so the tradeoff is visible rather than implicit. That is the speed knob to reach for; if the
+#: model you are porting ran TF32 matmuls, call `torch.set_float32_matmul_precision` in your `model.py`
+#: and record it in the implementation report.
+precision: 32-true

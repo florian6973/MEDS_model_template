@@ -46,7 +46,6 @@ class _TrainFlow:
     output_key: ClassVar[str]
 
     def run(self, cfg: DictConfig) -> Path:
-        import torch
         from lightning.pytorch import seed_everything
 
         from ..lightning import build_datamodule, build_trainer
@@ -57,7 +56,6 @@ class _TrainFlow:
 
         if cfg.get("seed") is not None:
             seed_everything(cfg.seed, workers=True)
-        torch.set_float32_matmul_precision("medium")
 
         label_extras = self.prepare_labels(cfg, work_dir)
         datamodule = build_datamodule(cfg)
@@ -196,7 +194,6 @@ class ProbeTrainCommand(_TrainFlow, SupervisedTrainCommand):
         raise NotImplementedError("ProbeTrainCommand builds its module inside run().")
 
     def run(self, cfg: DictConfig) -> Path:
-        import torch
         from hydra.utils import instantiate
         from lightning.pytorch import seed_everything
 
@@ -216,7 +213,6 @@ class ProbeTrainCommand(_TrainFlow, SupervisedTrainCommand):
 
         if cfg.get("seed") is not None:
             seed_everything(cfg.seed, workers=True)
-        torch.set_float32_matmul_precision("medium")
 
         labels_dir, label_summary = materialize_labels(
             cfg.external_labels_dir, Path(cfg.input_data_dir) / PATIENTS_SUBDIR, work_dir / "labels"
