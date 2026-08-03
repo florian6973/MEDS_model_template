@@ -114,6 +114,7 @@ def test_render_profile(tmp_path, profile, commands):
         "src/meds_model_base/commands/base.py",
         "tests/test_smoke_pipeline.py",
         "tests/test_meds_dev_e2e.py",
+        "tests/test_synthetic_statics.py",
     ]:
         assert (dst / rel).exists(), f"missing rendered file: {rel}"
 
