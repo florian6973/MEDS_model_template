@@ -64,9 +64,9 @@ These are the ones that matter. "Branch" column gives the exact site.
 
 | key | commands | branch | non-default behaviour | in README | tested |
 |---|---|---|---|---|---|
-| `do_resume` | pretrain, supervised_train | `utils.py:51-55` | reuse scratch checkpoints from a previous attempt, or discard them | ✗ | ✗ |
-| `work_dir` | pretrain, supervised_train | `utils.py:37` | relocate the scratch directory away from the output sibling | ✗ | ✗ |
-| `clean_work_dir` | pretrain, supervised_train | `train.py:87`, `train.py:256` | keep the scratch tree instead of `rmtree`ing it | ✗ | ✗ |
+| `do_resume` | pretrain, supervised_train | `utils.py:58-62` | reuse scratch checkpoints from a previous attempt. **Now defaults to `false`** — see below | ✗ | ✗ |
+| ~~`work_dir`~~ | — | — | **Removed.** Scratch is always `<output_dir>.work`; the key bought a relocation nobody needed and a branch nobody tested | — | — |
+| ~~`clean_work_dir`~~ | — | — | **Removed.** Scratch is always removed once the artifact is published; keeping it only offered a later `do_resume=true` a checkpoint from a run that had already finished | — | — |
 | `pipeline` | preprocess_data | `preprocess_data.py:64` | runs an entire additional CLI (`MEDS_transform-pipeline`) before tensorization | ✗ | ✗ |
 | `pipeline_overrides` | preprocess_data | argv extension | appends Hydra overrides to that CLI | ✗ | ✗ |
 | `attach_labels` | predict | `predict.py:121` | emit predictions *without* `boolean_value` | ✗ | ✗ |
@@ -78,9 +78,24 @@ These are the ones that matter. "Branch" column gives the exact site.
 
 ### Ranked by how quietly it fails
 
-1. **`do_resume` / `work_dir` / `clean_work_dir`.** The only *silent* failure mode in the table: a resume
-   that picks up an unrelated run's checkpoint yields a model that trains, predicts and looks entirely
-   plausible. Everything else here fails loudly. Inspect first.
+1. **~~`do_resume` / `work_dir` / `clean_work_dir`.~~ Addressed: one default flipped, two keys removed.**
+   The only *silent* failure mode in the table: a resume that picks up an unrelated run's checkpoint
+   yields a model that trains, predicts and looks entirely plausible. Everything else here fails loudly.
+
+   `do_resume` now ships as `false`, so the silent path is opt-in rather than the default. That was the
+   whole exposure: the work directory is derived from the output path alone, nothing in it records which
+   config, task or dataset produced the checkpoint, and `trainer.fit(ckpt_path=...)` restores optimizer
+   state, LR-schedule position and the epoch counter along with the weights. Scratch is removed once the
+   artifact is published, so a checkpoint survived only a crash — exactly when the config gets changed
+   before the re-run.
+
+   `work_dir` and `clean_work_dir` are both gone. Neither earned a branch: one relocated scratch nobody
+   needed to relocate, the other kept scratch whose only remaining use was to feed a later resume a
+   checkpoint from a run that had already finished.
+
+   The complete fix is to record a config hash in the work directory and refuse to resume when it differs;
+   flipping the default buys most of that safety for one line, and the hash can follow if resume is ever
+   used in anger.
 2. **Determinism settings** (`trainer.deterministic` / `trainer.benchmark`, §1, plus the hardcoded matmul
    precision below). Equally silent, and it degrades every other result: two runs at the same seed can
    disagree, so no measurement in the repository is reproducible evidence of anything.
@@ -175,7 +190,7 @@ For seeing the whole surface at once. `???` = required, no default.
 | command | keys |
 |---|---|
 | `preprocess_data` | `external_meds_dir ???`, `output_data_dir`, **`pipeline`**, **`pipeline_overrides`**, `do_overwrite` |
-| `pretrain` | `input_data_dir`, `output_pretrained_model_dir`, `max_seq_len`, `batch_size`, `num_workers`, **`seed`**, `do_overwrite`, **`do_resume`**, **`work_dir`**, **`clean_work_dir`** |
+| `pretrain` | `input_data_dir`, `output_pretrained_model_dir`, `max_seq_len`, `batch_size`, `num_workers`, **`seed`**, `do_overwrite`, **`do_resume`** (~~`work_dir`~~, ~~`clean_work_dir`~~ removed) |
 | `supervised_train` | the `pretrain` keys, plus `external_labels_dir ???`, `output_supervised_model_dir`, `input_pretrained_model_dir`, `input_inference_subdir` |
 | `infer` | `input_data_dir`, `input_pretrained_model_dir`, `output_inference_subdir`, `external_labels_dir ???`, **`splits`**, `max_seq_len`, `batch_size`, `num_workers`, `do_overwrite` |
 | `predict` | **`input_data_dir` (nullable)**, `external_labels_dir ???`, `output_predictions_dir`, **`attach_labels`**, the three `input_*` sources, **`splits`**, `max_seq_len`, `batch_size`, `num_workers`, `do_overwrite` |

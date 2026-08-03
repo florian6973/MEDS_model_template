@@ -84,8 +84,9 @@ class _TrainFlow:
             extras.update(model_extras)
             extras.update(label_extras)
 
-        if bool(cfg.get("clean_work_dir", True)):
-            shutil.rmtree(work_dir, ignore_errors=True)
+        # The artifact is published; the scratch tree has nothing the artifact does not, and leaving it
+        # would only give a later `do_resume=true` a checkpoint from a run that already finished.
+        shutil.rmtree(work_dir, ignore_errors=True)
         logger.info("Training complete; artifact at %s.", output_dir)
         return output_dir
 
@@ -252,8 +253,7 @@ class ProbeTrainCommand(_TrainFlow, SupervisedTrainCommand):
                 **coverage,
             }
 
-        if bool(cfg.get("clean_work_dir", True)):
-            shutil.rmtree(work_dir, ignore_errors=True)
+        shutil.rmtree(work_dir, ignore_errors=True)
         return output_dir
 
 
