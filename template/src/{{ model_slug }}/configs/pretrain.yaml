@@ -21,10 +21,13 @@ num_workers: 0
 seed: 0
 
 do_overwrite: false
-#: Resume from a previous interrupted run's work directory (not from a published artifact).
-do_resume: true
-work_dir: null
-clean_work_dir: true
+#: Resume from an interrupted run's work directory (not from a published artifact). Off by default: the
+#: work directory is derived from the output path alone, so nothing checks that the checkpoint in it came
+#: from this config, task or dataset, and `ckpt_path` restores optimizer state, LR-schedule position and
+#: the epoch counter with the weights. Scratch lives at `<output_dir>.work` and is removed once the
+#: artifact is published, so a checkpoint survives only a crash — exactly when the config gets changed
+#: before the re-run. Turn this on to continue the *same* run; a changed config needs a fresh one.
+do_resume: false
 
 hydra:
   run: {dir: "${log_dir}/pretrain"}

@@ -23,19 +23,17 @@ BEST_CKPT_FILENAME = "checkpoint"
 WORK_DIR_SUFFIX = ".work"
 
 
-def work_dir_for(output_dir: Path | str, cfg=None) -> Path:
+def work_dir_for(output_dir: Path | str) -> Path:
     """Resolve the scratch directory for a training run.
 
-    Uses ``cfg.work_dir`` when set, else a sibling of the artifact directory suffixed with ``.work``. This
-    is deliberately *outside* the artifact so that a failed run leaves no partial artifact behind, while
-    still leaving checkpoints on disk to resume from.
+    Always a sibling of the artifact directory suffixed with ``.work``. This is deliberately *outside* the
+    artifact so that a failed run leaves no partial artifact behind, while still leaving checkpoints on
+    disk to resume from.
 
     Examples:
         >>> str(work_dir_for("/runs/models/pretrained"))
         '/runs/models/pretrained.work'
     """
-    if cfg is not None and cfg.get("work_dir"):
-        return Path(cfg.work_dir)
     output_dir = Path(output_dir)
     return output_dir.with_name(output_dir.name + WORK_DIR_SUFFIX)
 
@@ -46,8 +44,17 @@ def prepare_work_dir(output_dir: Path | str, cfg=None) -> tuple[Path, Path | Non
     ``resume_ckpt`` is a checkpoint to resume from when ``cfg.do_resume`` is set and one exists. When
     ``do_resume`` is false any prior scratch state is discarded, so a fresh run never silently inherits
     checkpoints from an unrelated earlier attempt.
+
+    **``do_resume`` ships as false, and that default is the safety property.** The work directory is
+    derived from the output path alone; nothing in it records which config, task or dataset produced the
+    checkpoint, and ``trainer.fit(ckpt_path=...)`` restores optimizer state, LR-schedule position and the
+    epoch counter along with the weights. Scratch is removed once the artifact is published, so a
+    checkpoint survives only a crash — which is exactly when the config gets changed before the
+    re-run. Resuming across that change yields a model trained under two different configurations that
+    trains, predicts and looks entirely plausible. Turn it on to continue the *same* run; a changed config
+    needs a fresh one.
     """
-    work_dir = work_dir_for(output_dir, cfg)
+    work_dir = work_dir_for(output_dir)
     do_resume = bool(cfg.get("do_resume", False)) if cfg is not None else False
 
     resume_ckpt: Path | None = None
