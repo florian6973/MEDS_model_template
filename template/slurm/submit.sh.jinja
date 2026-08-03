@@ -1,0 +1,192 @@
+#!/usr/bin/env bash
+# Submit {{ model_name }}'s command chain to SLURM, one job per command, wired together with
+# `--dependency` so the whole DAG can be queued from a login node in one go.
+#
+#   ./slurm/submit.sh                          # the chain, once, for $LABELS_DIR
+#   ./slurm/submit.sh --tasks-file tasks.txt   # the task-dependent stages as a job *array*, one per task
+#   ./slurm/submit.sh --only supervised_train  # a single stage
+#   ./slurm/submit.sh --dry-run                # print the sbatch commands and submit nothing
+#   ./slurm/submit.sh -- trainer.max_epochs=50 # anything after `--` is appended as a Hydra override
+#
+# The stage list comes from `meds-model commands`, so this follows whatever DAG the model registers rather
+# than a copy of it. The *arguments* per stage are the same wiring as
+# `meds_model_base.testing.harness.run_chain`; if you add a command, both need the new arm (a template
+# render test asserts this script covers every command).
+set -euo pipefail
+
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+# shellcheck source=config.sh
+source slurm/config.sh
+
+usage() {
+  cat <<'EOF'
+Submit this model's command chain to SLURM, one job per command, chained with --dependency.
+
+  ./slurm/submit.sh                          the chain, once, for $LABELS_DIR
+  ./slurm/submit.sh --tasks-file tasks.txt   task-dependent stages as a job array, one element per task
+  ./slurm/submit.sh --only supervised_train  a single stage
+  ./slurm/submit.sh --dry-run                print the sbatch commands and submit nothing
+  ./slurm/submit.sh -- trainer.max_epochs=50 anything after `--` is appended as a Hydra override
+
+Settings live in slurm/config.sh; see slurm/README.md.
+EOF
+}
+die() { echo "slurm/submit.sh: $*" >&2; exit 1; }
+
+DRY=0
+TASKS_FILE=""
+ONLY=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --tasks-file) TASKS_FILE=${2:?--tasks-file needs a path}; shift 2 ;;
+    --only) ONLY=${2:?--only needs a command name}; shift 2 ;;
+    --dry-run) DRY=1; shift ;;
+    -h|--help) usage; exit 0 ;;
+    --) shift; break ;;
+    *) die "unknown option $1 (see --help)" ;;
+  esac
+done
+EXTRA=("$@")
+
+# `meds-model commands` has to be importable here, not just on the compute node.
+if [ -n "$SETUP" ]; then eval "$SETUP"; fi
+command -v meds-model >/dev/null || die "meds-model is not on PATH after SETUP='$SETUP'"
+
+mapfile -t STAGES < <(meds-model commands)
+# Deliberately not `${` + `#STAGES[@]}`: this file is a Jinja template, and that opens a comment tag.
+[ -n "${STAGES[0]:-}" ] || die "meds-model commands listed nothing"
+
+has() { printf '%s\n' "${STAGES[@]}" | grep -qx "$1"; }
+
+#: Stages that depend on a task, and so become array elements under --tasks-file. `preprocess_data` and
+#: `pretrain` are task-free by construction — the workspace and the foundation model are built once and
+#: shared, which is the whole point of `data_dir` being a shared workspace.
+task_scoped() { case "$1" in infer | supervised_train | predict) return 0 ;; *) return 1 ;; esac; }
+
+#: Fill $ARGS with the `meds-model <stage>` arguments. `@LABELS@` and `@TASK@` are placeholders resolved
+#: either here (single-task) or inside job.sbatch by each array element.
+stage_args() {
+  ARGS=()
+  case "$1" in
+    preprocess_data)
+      ARGS=("external_meds_dir=$MEDS_ROOT" "output_data_dir=$RUN_DIR/data")
+      ;;
+    pretrain)
+      ARGS=("input_data_dir=$RUN_DIR/data" "output_pretrained_model_dir=$RUN_DIR/models/pretrained")
+      ;;
+    infer)
+      ARGS=("input_data_dir=$RUN_DIR/data"
+            "input_pretrained_model_dir=$RUN_DIR/models/pretrained"
+            "output_inference_subdir=inference/@TASK@"
+            "external_labels_dir=@LABELS@")
+      ;;
+    supervised_train)
+      ARGS=("input_data_dir=$RUN_DIR/data"
+            "external_labels_dir=@LABELS@"
+            "output_supervised_model_dir=$RUN_DIR/@TASK@/models/supervised")
+      # At most one prior artifact, never both — supplying two is an error, not a precedence decision.
+      if has infer; then
+        ARGS+=("input_inference_subdir=inference/@TASK@")
+      elif has pretrain; then
+        ARGS+=("input_pretrained_model_dir=$RUN_DIR/models/pretrained")
+      fi
+      ;;
+    predict)
+      ARGS=("external_labels_dir=@LABELS@" "output_predictions_dir=$RUN_DIR/@TASK@/predictions")
+      if has supervised_train; then
+        ARGS+=("input_supervised_model_dir=$RUN_DIR/@TASK@/models/supervised")
+      elif has infer; then
+        ARGS+=("input_inference_subdir=inference/@TASK@")
+      elif has pretrain; then
+        ARGS+=("input_pretrained_model_dir=$RUN_DIR/models/pretrained")
+      else
+        # A packaged model has no source artifact, so nothing records the workspace for it to recover.
+        ARGS+=("input_data_dir=$RUN_DIR/data")
+      fi
+      ;;
+    *) die "no argument wiring for command '$1'; add an arm to stage_args()" ;;
+  esac
+}
+
+#: Fill $RES with the sbatch resource flags for a stage. Empty settings are dropped rather than passed as
+#: empty flags, so an unset ACCOUNT means "the cluster's default" and not `--account=`.
+stage_resources() {
+  RES=(--cpus-per-task="$CPUS" --mem="$MEM")
+  [ -n "$ACCOUNT" ] && RES+=(--account="$ACCOUNT")
+  [ -n "$QOS" ] && RES+=(--qos="$QOS")
+  if [ "$1" = preprocess_data ]; then
+    RES+=(--time="$TIME_CPU")
+    [ -n "$PARTITION_CPU" ] && RES+=(--partition="$PARTITION_CPU")
+  else
+    RES+=(--time="$TIME_GPU")
+    [ -n "$PARTITION_GPU" ] && RES+=(--partition="$PARTITION_GPU")
+    [ "${GPUS:-0}" -gt 0 ] && RES+=(--gres=gpu:"$GPUS")
+  fi
+  return 0
+}
+
+# --- preconditions, checked before anything is queued -----------------------------------------------
+if [ -n "$TASKS_FILE" ]; then
+  [ -s "$TASKS_FILE" ] || die "--tasks-file '$TASKS_FILE' is missing or empty"
+  N_TASKS=$(grep -c . "$TASKS_FILE")
+  while read -r labels; do
+    [ -n "$labels" ] && [ -d "$labels" ] || die "task list entry is not a directory: '$labels'"
+  done <"$TASKS_FILE"
+else
+  N_TASKS=1
+fi
+if has preprocess_data && [ ! -d "$MEDS_ROOT" ]; then
+  die "MEDS_ROOT='$MEDS_ROOT' is not a directory (edit slurm/config.sh)"
+fi
+if [ -z "$TASKS_FILE" ] && [ ! -d "$LABELS_DIR" ]; then
+  for stage in "${STAGES[@]}"; do
+    task_scoped "$stage" && die "LABELS_DIR='$LABELS_DIR' is not a directory (edit slurm/config.sh)"
+  done
+fi
+mkdir -p slurm-logs
+
+# --- submit -----------------------------------------------------------------------------------------
+prev_jid=""
+prev_array=0
+for stage in "${STAGES[@]}"; do
+  if [ -n "$ONLY" ] && [ "$ONLY" != "$stage" ]; then continue; fi
+
+  stage_args "$stage"
+  stage_resources "$stage"
+
+  is_array=0
+  if [ -n "$TASKS_FILE" ] && task_scoped "$stage"; then is_array=1; fi
+  if [ "$is_array" -eq 0 ]; then
+    ARGS=("${ARGS[@]//@LABELS@/$LABELS_DIR}")
+    ARGS=("${ARGS[@]//@TASK@/$(basename "$LABELS_DIR")}")
+  fi
+
+  SB=(sbatch --parsable --job-name="{{ model_slug }}-$stage" "${RES[@]}")
+  if [ -n "$prev_jid" ]; then
+    # `aftercorr` pairs array element i with element i of the previous array, so task N's predict waits
+    # only on task N's training. Between differently-shaped stages it has to be a whole-job `afterok`.
+    if [ "$is_array" -eq 1 ] && [ "$prev_array" -eq 1 ]; then
+      SB+=(--dependency=aftercorr:"$prev_jid")
+    else
+      SB+=(--dependency=afterok:"$prev_jid")
+    fi
+  fi
+  if [ "$is_array" -eq 1 ]; then
+    SB+=(--array=1-"$N_TASKS" --export=ALL,TASKS_FILE="$TASKS_FILE")
+  fi
+  SB+=(slurm/job.sbatch "$stage" "${ARGS[@]}" ${EXTRA[@]+"${EXTRA[@]}"})
+
+  if [ "$DRY" -eq 1 ]; then
+    printf '%q ' "${SB[@]}"; printf '\n'
+    jid="<dry-run>"
+  else
+    jid=$("${SB[@]}")
+    if [ "$is_array" -eq 1 ]; then
+      echo "submitted $stage as job $jid (array 1-$N_TASKS)"
+    else
+      echo "submitted $stage as job $jid"
+    fi
+  fi
+  prev_jid=$jid
+  prev_array=$is_array
+done

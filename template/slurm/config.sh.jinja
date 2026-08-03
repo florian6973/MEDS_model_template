@@ -1,0 +1,58 @@
+# Site and run configuration for {{ model_name }}'s SLURM helpers. **This is the file you edit.**
+#
+# Every value is also overridable from the environment, so a one-off does not need an edit:
+#   PARTITION_GPU=a100 TIME_GPU=48:00:00 ./slurm/submit.sh
+#
+# Sourced by both `slurm/submit.sh` (on the login node) and `slurm/job.sbatch` (on the compute node), so
+# keep it free of anything that only works in one of those places.
+
+# ---------------------------------------------------------------------------------------------------
+# Where the data is
+# ---------------------------------------------------------------------------------------------------
+
+#: external_meds_dir — a MEDS dataset **sharded by split** (data/train/…, data/tuning/…, data/held_out/…).
+: "${MEDS_ROOT:=/path/to/meds/dataset}"
+
+#: external_labels_dir — a MEDS labels directory (subject_id, prediction_time, boolean_value), e.g. what
+#: `meds-dev-task` writes. Ignored when you pass `--tasks-file`, which supplies one per array element.
+: "${LABELS_DIR:=/path/to/labels}"
+
+#: Root for everything this chain produces. `patients/` is built once directly under it; task-dependent
+#: artifacts go under `$RUN_DIR/<task>/` so several tasks can share one workspace without colliding.
+: "${RUN_DIR:=$PWD/runs/slurm}"
+
+# ---------------------------------------------------------------------------------------------------
+# Scheduler
+# ---------------------------------------------------------------------------------------------------
+# Empty values are omitted from the sbatch command line rather than passed as empty flags, so leaving
+# ACCOUNT/QOS/PARTITION_* unset just means "whatever the cluster defaults to".
+
+: "${ACCOUNT:=}"          # --account
+: "${QOS:=}"              # --qos
+: "${PARTITION_CPU:=}"    # partition for preprocess_data, which shells out to MEDS-transforms and MTD
+: "${PARTITION_GPU:=}"    # partition for the training and inference commands
+: "${GPUS:=1}"            # --gres=gpu:$GPUS on the GPU stages; set to 0 to run the whole chain on CPU
+: "${CPUS:=8}"            # --cpus-per-task
+: "${MEM:=64G}"           # --mem
+: "${TIME_CPU:=04:00:00}" # --time for preprocess_data
+: "${TIME_GPU:=24:00:00}" # --time for everything else
+
+# ---------------------------------------------------------------------------------------------------
+# The job environment
+# ---------------------------------------------------------------------------------------------------
+
+#: Runs inside the job, before `meds-model`. Whatever makes this package importable on a compute node —
+#: a module load, a conda activate, a container exec prefix, …
+#: Assigned only when *unset* (no colon), so `SETUP=` genuinely means "nothing to do" rather than
+#: silently falling back to the default.
+: "${SETUP=source .venv/bin/activate}"
+
+#: Appended verbatim to every `meds-model` invocation, as Hydra overrides. This is where cluster-shaped
+#: settings belong, e.g.:
+#:
+#:   OVERRIDES='num_workers=7 batch_size=64'
+#:
+#: `num_workers` is deliberately **not** derived from $CPUS: changing it alters the order in which the
+#: dataloader consumes the RNG, so two runs that differ only in worker count are not comparable even at
+#: the same seed. Set it once, deliberately, and record it alongside your results.
+: "${OVERRIDES:=}"

@@ -45,6 +45,8 @@ test fixture is the failure mode that document exists to prevent** — fix the f
 {% endif %}| `src/{{ model_slug }}/commands.py` | you | never touched |
 | `src/{{ model_slug }}/configs/{model,paths,profile}/` | you | never touched |
 | `src/{{ model_slug }}/configs/` (other groups), `__main__.py` | template | 3-way merged |
+| `slurm/config.sh` | you (site settings) | 3-way merged |
+| `slurm/{job.sbatch,submit.sh,README.md}` | template | 3-way merged |
 | `src/meds_model_base/` | template | **overwritten** |
 
 `src/meds_model_base/` is the vendored contract: the command ABCs and source arbitration, the
