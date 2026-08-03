@@ -97,9 +97,7 @@ class _PredictRunMixin:
             cfg.datamodule.config.task_labels_dir = str(labels_dir)
             splits = resolve_splits(cfg)
             index = load_index(labels_dir, splits)
-            logger.info(
-                "Predicting %d timepoints across %d split(s).", len(index), index["split"].n_unique()
-            )
+            logger.info("Predicting %d timepoints across %d split(s).", len(index), index["split"].n_unique())
             predictions = self.predict(cfg, (role, value), index)
 
         coverage = _check_coverage(index, predictions)
@@ -169,17 +167,14 @@ def _check_coverage(index: pl.DataFrame, predictions: pl.DataFrame) -> dict:
     )
     short = report.filter(pl.col("n_written") < pl.col("n_expected"))
     if len(short):
-        detail = "; ".join(
-            f"{r['split']}: {r['n_written']}/{r['n_expected']}" for r in short.to_dicts()
-        )
+        detail = "; ".join(f"{r['split']}: {r['n_written']}/{r['n_expected']}" for r in short.to_dicts())
         raise CoverageError(
             f"The model scored fewer timepoints than the task defines ({detail}). Predictions must cover "
             "the whole index: a short file is indistinguishable from a complete one downstream. Either fix "
             "the model's coverage, or restrict the request with splits=[...]."
         )
     return {
-        r["split"]: {"n_expected": r["n_expected"], "n_written": r["n_written"]}
-        for r in report.to_dicts()
+        r["split"]: {"n_expected": r["n_expected"], "n_written": r["n_written"]} for r in report.to_dicts()
     }
 
 
@@ -260,9 +255,7 @@ class MaterializedPredictCommand(_PredictRunMixin, PredictCommand):
                 f"{inference_dir / ARTIFACTS_FILENAME} has no {PROBABILITY_COLUMN!r} column; scores "
                 "materialized for prediction must carry one."
             )
-        return index.select(KEYS).join(
-            artifacts.select([*KEYS, PROBABILITY_COLUMN]), on=KEYS, how="left"
-        )
+        return index.select(KEYS).join(artifacts.select([*KEYS, PROBABILITY_COLUMN]), on=KEYS, how="left")
 
 
 class PackagedPredictCommand(_PredictRunMixin, PredictCommand):
@@ -329,9 +322,7 @@ def _attach_ground_truth(predictions: pl.DataFrame, external_labels_dir) -> pl.D
 
     loaded = read_labels(external_labels_dir)
     labels = pl.concat(loaded.values(), how="vertical_relaxed") if isinstance(loaded, dict) else loaded
-    return predictions.join(
-        labels.select([*KEYS, "boolean_value"]).unique(subset=KEYS), on=KEYS, how="left"
-    )
+    return predictions.join(labels.select([*KEYS, "boolean_value"]).unique(subset=KEYS), on=KEYS, how="left")
 
 
 def _labels_ref(labels_dir) -> dict:

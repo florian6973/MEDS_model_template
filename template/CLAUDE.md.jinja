@@ -1,0 +1,128 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## What this repository is
+
+`{{ model_name }}` — a MEDS model generated from
+[MEDS_model_template](https://github.com/mmcdermott/MEDS_model_template) with the **`{{ profile }}`**
+profile. The template generated the *command DAG*, the artifact discipline and the conformance suite.
+**It generated no model:** `src/{{ model_slug }}/model.py` is a stub whose hooks raise.
+
+This DAG's chain:
+
+{% if profile == 'supervised' %}`preprocess_data` → `supervised_train` → `predict`
+{% elif profile == 'finetune' %}`preprocess_data` → `pretrain` → `supervised_train` → `predict`
+{% elif profile == 'probe' %}`preprocess_data` → `pretrain` → `infer` (embeddings) → `supervised_train` (a head on the frozen features) → `predict`
+{% elif profile == 'zero_shot_direct' %}`preprocess_data` → `pretrain` → `predict` (straight from the pretrained model)
+{% elif profile == 'zero_shot_materialized' %}`preprocess_data` → `pretrain` → `infer` (task scores) → `predict` (from those artifacts)
+{% elif profile == 'packaged' %}`preprocess_data` → `predict` (weights ship with the repository; nothing trains)
+{% else %}whatever `meds-model commands` lists — run it, and read `src/{{ model_slug }}/configs/profile/default.yaml`
+{% endif %}
+`README.md` documents the commands, their arguments and the artifact layout — read it for usage. This
+file covers what is easy to get wrong from the inside.
+
+## Porting an existing model? Read the procedure first
+
+If the task is to reimplement a published model (a package, a paper repo) here, read
+[`docs/PORTING-A-MODEL.md`](docs/PORTING-A-MODEL.md) **in full before writing any code**. It is not
+background: it defines a required deliverable — `IMPLEMENTATION_REPORT.md`, a ledger recording every
+element of the source as ported, adapted or omitted — and an inventory step that comes before the first
+line of code.
+
+It exists because the first port done this way reproduced the architecture and the training objective and
+silently dropped four other things: the vocabulary adaptation that makes the model work at all, the
+optimiser's weight-decay grouping, the LR schedule, and the LR value. Each omission was afterwards
+described as a deliberate design difference. **Dropping a source element because it is awkward for the
+test fixture is the failure mode that document exists to prevent** — fix the fixture instead.
+
+## Ownership: what you write, and what `copier update` overwrites
+
+| Path | Owner | On `copier update` |
+|---|---|---|
+| `src/{{ model_slug }}/model.py` | you | never touched (`_skip_if_exists`) |
+{% if profile in ['zero_shot_direct', 'packaged'] %}| `src/{{ model_slug }}/predict.py` | you | never touched |
+{% endif %}| `src/{{ model_slug }}/commands.py` | you | never touched |
+| `src/{{ model_slug }}/configs/{model,paths,profile}/` | you | never touched |
+| `src/{{ model_slug }}/configs/` (other groups), `__main__.py` | template | 3-way merged |
+| `src/meds_model_base/` | template | **overwritten** |
+
+`src/meds_model_base/` is the vendored contract: the command ABCs and source arbitration, the
+`meds-model` dispatcher, the manifest layer, the default command implementations, the schemas, and a
+small MEDS-batch adapter layer. It contains no models. **Do not edit it to make a model fit** — the next
+`copier update` discards the change. If the contract genuinely blocks the model, that is a finding to
+raise upstream and to record, not a local patch.
+
+It also carries two pieces of template-managed *tooling* that are deliberately not part of the command
+contract: `meds_model_base.testing` (the conformance harness) and `meds_model_base.meds_dev`
+(`meds-model-add-to-meds-dev`). Neither may become a sixth command.
+
+## The stub is deliberate
+
+`model.py` declares the hooks this DAG calls — its module docstring lists exactly which — and each raises
+`NotImplementedError`. The class attribute `is_stub = True` is the marker.
+
+Delete `is_stub` once the model is real. The conformance tests that need a model call
+`meds_model_base.testing.skip_if_stub` and skip until it is gone; they are the specification the model
+has to satisfy, not scaffolding to delete. A fresh repository is therefore green *and* honest — pass
+`-rs` to see what is skipping and why:
+
+```bash
+uv run pytest -m "not slow" -rs   # CLI, workspace, arbitration, and the end-to-end conformance test
+uv run pytest -m slow -rs         # designed-signal learnability, with a negative control
+uv run pytest -m meds_dev -rs     # opt-in: clones MEDS-DEV and runs this model through it
+```
+
+**"All tests pass" while the stub is in place means the model was never tested.** Report skip counts
+alongside pass counts, and say which tier was skipping.
+
+## Rules that look like details and are not
+
+Each of these otherwise produces output that looks correct:
+
+- **The dispatcher calls `command(cfg)`, never `command.run(cfg)`.** `__call__` runs `validate()`, which
+  arbitrates the sources and caches the result on `self.source`. Calling `run` directly bypasses
+  arbitration entirely.
+- **Sources are alternatives, not layers.** Supplying two is an error; supplying one an implementation
+  does not list in `supported_sources` is an error. There is no precedence order, and adding one is not a
+  fix.
+- **Manifests are read, not just written.** `_runtime.load_trained_module` takes `module_class` from the
+  artifact's manifest rather than `cfg.model._target_`, because a checkpoint is loadable only by the
+  class that wrote it; `resolve_workspace` recovers `input_data_dir` from the source model's manifest.
+  That is why `predict` needs no workspace argument — adding one invites the mismatch the manifest
+  exists to prevent.
+- **`predict` never reads ground truth.** `_runtime.load_index` drops `boolean_value`, so
+  `batch.boolean_value` is absent at prediction time. Labels are joined back onto the output afterwards,
+  because `meds-evaluation` scores a predictions file in isolation.
+- **`predict` enforces coverage.** Every index timepoint in the selected splits is scored or the command
+  fails; `n_expected` / `n_written` are recorded per split. Narrow the request with `splits=[held_out]`
+  rather than writing a short file.
+- **A warm start that matches zero parameters raises.** Non-strict checkpoint loading is what makes a
+  fresh head possible; it also silently yields a randomly initialised model when an encoder is renamed.
+- **Publish artifacts through `write_artifact()`.** It stages into a temp sibling and renames into place,
+  writing `manifest.yaml` last — so a directory that exists is a directory that finished.
+- **Import weight is load-bearing.** `commands/base.py`, `manifest.py` and `dispatch.py` are torch-free
+  so `meds-model commands` and `--help` stay cheap, and `commands/__init__.py` imports the heavy
+  implementations lazily through a module-level `__getattr__`. A CLI smoke test depends on it; don't
+  hoist those imports.
+- **`schemas.py` omits `from __future__ import annotations` on purpose.** `flexible_schema` reads live
+  `Required(...)` descriptors off class annotations, and PEP 563 stringization breaks schema
+  construction.
+
+## Configuration
+
+Every command is a Hydra application over `src/{{ model_slug }}/configs/`, with one root config per
+command, named after it. Any field is overridable on the command line
+(`meds-model supervised_train trainer.max_epochs=50 model.d_model=256`); shared locations live in
+`paths/default.yaml`.
+
+Configure through the config tree, not in Python: a logger constructed inside `model.py` is invisible to
+`logger=`, and a hyperparameter hardcoded there is invisible to a sweep and absent from the run's
+recorded config.
+
+## Before reporting the work as done
+
+- `uv run pytest -m "not slow" -rs` and `uv run pytest -m slow -rs`, with pass *and* skip counts reported.
+- `uv run ruff check .` and `uv run ruff format --check .` (pre-commit runs both).
+- If anything was ported from another package, `IMPLEMENTATION_REPORT.md` exists and satisfies the
+  Step 7 checklist in `docs/PORTING-A-MODEL.md`.

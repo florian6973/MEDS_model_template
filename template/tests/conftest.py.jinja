@@ -8,6 +8,7 @@ so any test module can import it. A ``conftest.py`` is not importable from a sib
 is not a package, and ``from .conftest import ...`` fails at collection time — before ``-m "not slow"`` can
 deselect anything.
 """
+
 from pathlib import Path
 
 import pytest

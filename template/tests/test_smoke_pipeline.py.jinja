@@ -8,6 +8,7 @@ evaluation tool.
 skip while ``model.py`` is the generated stub, and start running as soon as you remove the ``is_stub``
 marker. The parts that don't — the workspace, the manifests, argument arbitration — run from day one.
 """
+
 import polars as pl
 import pytest
 import yaml
@@ -50,9 +51,9 @@ def test_inference_never_sees_ground_truth(data_dir, labels_dir, tmp_path):
     Training is the opposite case and is checked here too, so the difference is deliberate rather than
     incidental. Needs no model.
     """
+    from meds_model_base.tasks import materialize_labels
     from meds_torchdata import MEDSPytorchDataset, MEDSTorchDataConfig
     from meds_torchdata.types import SubsequenceSamplingStrategy
-    from meds_model_base.tasks import materialize_labels
 
     patients = data_dir / "patients"
 

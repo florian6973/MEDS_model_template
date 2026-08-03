@@ -10,6 +10,7 @@ a supervised model, a fine-tune, a probe and a zero-shot model alike.
 
 Deselected in the fast CI job (`-m "not slow"`); run it before you claim the model works.
 """
+
 import polars as pl
 import pytest
 from meds_model_base.testing import (
@@ -52,7 +53,5 @@ def test_negative_control_does_not_learn(chain, tmp_path):
     skip_if_stub(Model)
     preds, held = _predictions_for(chain, tmp_path, "control", shuffle_labels=True, seed=1)
     joined = preds.join(held, on=["subject_id", "prediction_time"], how="inner")
-    ctrl = binary_auroc(
-        joined["boolean_value"].to_list(), joined["predicted_boolean_probability"].to_list()
-    )
+    ctrl = binary_auroc(joined["boolean_value"].to_list(), joined["predicted_boolean_probability"].to_list())
     assert ctrl <= 0.70, f"negative control learned a shuffled signal (AUROC={ctrl:.3f}); test is unsound"

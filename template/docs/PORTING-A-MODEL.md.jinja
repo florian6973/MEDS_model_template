@@ -1,8 +1,8 @@
-# Porting an existing model into a generated repository
+# Porting an existing model into this repository
 
-A procedure for reimplementing a published model (a package, a paper repo) inside a repository generated
-from this template, and a required output — an **implementation report** — that records what was ported,
-what was adapted, and what was left out.
+A procedure for reimplementing a published model (a package, a paper repo) inside `{{ model_name }}`, and
+a required output — an **implementation report** — that records what was ported, what was adapted, and
+what was left out.
 
 Written for an LLM agent doing the port, but the steps are the same for a person.
 
@@ -16,7 +16,7 @@ schedule, and the LR value. Only the first was written down, and only after the 
 The failure mode is specific and worth naming, because it is predictable:
 
 > An agent optimises for a green test suite. When an element of the source package is inconvenient for
-> the generated repo's tiny test fixture, the agent drops it and describes the omission as a *deliberate
+> this repository's tiny test fixture, the agent drops it and describes the omission as a *deliberate
 > design difference* — language that reads like a considered tradeoff and hides a convenience decision.
 
 Every rule below exists to make that particular move impossible to complete quietly.
@@ -32,7 +32,7 @@ test fixture. "It breaks the smoke test" is a reason to fix the fixture, not to 
 Read the source repository, not its README. Produce a list of:
 
 - **Entry points.** Every console script in `pyproject.toml`. Each one is a stage the model needs, and a
-  stage you must place somewhere in this template's DAG or explicitly account for.
+  stage you must place somewhere in this repository's DAG or explicitly account for.
 - **The preprocessing pipeline.** Every stage, and specifically **what it does to the vocabulary** —
   binning, tokenisation, derived codes, filtering. This is the element most often skipped, because it
   lives outside the model file and the model appears to run without it.
@@ -68,16 +68,18 @@ same token, and every time gap is invisible. The model still trains. The tests s
 
 ## Step 3 — Map every inventory item to a home
 
-| source element | where it goes in a generated repo |
+Config paths below are relative to `src/{{ model_slug }}/configs/`.
+
+| source element | where it goes in this repository |
 |---|---|
-| preprocessing / tokenisation pipeline | `configs/preprocess_data.yaml` → `pipeline:` (a MEDS-transforms YAML), or a documented pre-pass |
-| model architecture | `src/<slug>/model.py` — wrap the source package as a dependency, do not vendor a copy |
+| preprocessing / tokenisation pipeline | `preprocess_data.yaml` → `pipeline:` (a MEDS-transforms YAML), or a documented pre-pass |
+| model architecture | `src/{{ model_slug }}/model.py` — wrap the source package as a dependency, do not vendor a copy |
 | pretraining objective | `Model.compute_loss` when `not batch.has_labels` — delegate to the source's own loss where possible |
 | task objective | `Model.compute_loss` when `batch.has_labels` |
-| optimiser / schedule / LR | `configs/optimizer/*.yaml`, and override `configure_optimizers` if the source groups parameters |
-| seeding / determinism / precision | `seed` in `configs/pretrain.yaml` and `configs/supervised_train.yaml`; `deterministic` and `benchmark` in `configs/trainer/`; matmul precision (hardcoded in the vendored contract today — see #6) |
+| optimiser / schedule / LR | `optimizer/*.yaml`, and override `configure_optimizers` if the source groups parameters |
+| seeding / determinism / precision | `seed` in `pretrain.yaml` and `supervised_train.yaml`; `deterministic` and `benchmark` in `trainer/`; matmul precision (hardcoded in the vendored contract today — see [MEDS_model_template#6](https://github.com/florian6973/MEDS_model_template/issues/6)) |
 | generation / inference | `Model.predict_step`, `infer_step`, or `predict.py` depending on profile |
-| size presets | `configs/model/default.yaml` + `DEFAULT_*` in `model.py` |
+| size presets | `model/default.yaml` + `DEFAULT_*` in `model.py` |
 | logged metrics | the metrics dict returned from `compute_loss` |
 
 Anything with no home is a finding, not a silence. Record it.
@@ -89,7 +91,7 @@ Anything with no home is a finding, not a silence. Record it.
 - The target interface genuinely has no slot for it (e.g. a zero-shot generation path in a profile that
   does not register `infer`).
 - The source element is upstream-specific plumbing (its CLI, its own config system, its logging).
-- It conflicts with a load-bearing rule of this template (e.g. reading ground truth at inference).
+- It conflicts with a load-bearing rule of the vendored contract (e.g. reading ground truth at inference).
 
 **Illegitimate**, no matter how it is phrased:
 
@@ -102,7 +104,7 @@ Anything with no home is a finding, not a silence. Record it.
 
 ## Step 5 — The implementation report
 
-Write `IMPLEMENTATION_REPORT.md` at the root of the generated repository. It is not a summary of the
+Write `IMPLEMENTATION_REPORT.md` at the root of this repository. It is not a summary of the
 work — it is the ported-element ledger, and it is what makes the port reviewable without diffing two
 codebases.
 
@@ -147,8 +149,9 @@ number and move on.
 
 This port is also the first time several of the contract's guards run against a real model: the zero-match
 `RuntimeError` in `load_pretrained_weights`, `predict`'s `CoverageError`, and `_persist_checkpoint`'s
-`final_weights` fallback. Anything that fires is worth reporting upstream (see #7) — until now they have
-only ever been reasoned about.
+`final_weights` fallback. Anything that fires is worth reporting upstream
+([MEDS_model_template#7](https://github.com/florian6973/MEDS_model_template/issues/7)) — until now they
+have only ever been reasoned about.
 
 ## Step 7 — Before claiming completion
 

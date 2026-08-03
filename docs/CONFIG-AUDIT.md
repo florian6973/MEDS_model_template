@@ -106,8 +106,8 @@ Not config-driven, but in the same blind spot and worth inspecting together:
   matmuls in bfloat16. It is stable run-to-run, so it does not break same-machine reproducibility, but it
   silently diverges from any source implementation that ran at full precision — and because it lives in
   the vendored contract, a user can only change it by editing a file `copier update` overwrites. For the
-  porting procedure in `PORTING-A-MODEL.md`, whose deliverable is a ledger of deviations that affect
-  results, this is a deviation the template imposes invisibly.
+  porting procedure in `template/docs/PORTING-A-MODEL.md.jinja`, whose deliverable is a ledger of
+  deviations that affect results, this is a deviation the template imposes invisibly.
 - **`CoverageError`** (`predict.py:175`) — reachable in normal use; nothing exercises it.
 - **`InferenceKind.scores` / `MaterializedPredictCommand`** — reachable only through
   `zero_shot_materialized`, which `skip_if_stub`s.

@@ -177,9 +177,7 @@ def split_labels(labels: pl.DataFrame, cohort: dict[str, set[int]]) -> dict[str,
             "different dataset, or the preprocess_data pipeline filtered the whole cohort away."
         )
     if kept < labels.height:
-        dropped = labels.filter(
-            ~pl.col("subject_id").is_in(sorted(set().union(*cohort.values())))
-        )
+        dropped = labels.filter(~pl.col("subject_id").is_in(sorted(set().union(*cohort.values()))))
         logger.warning(
             "Dropping %d label row(s) for %d subject(s) absent from the tensorized cohort: either "
             "filtered out by the preprocess_data pipeline (its manifest records how many), or not part "

@@ -196,9 +196,8 @@ class ProbeTrainCommand(_TrainFlow, SupervisedTrainCommand):
 
     def run(self, cfg: DictConfig) -> Path:
         import torch
-        from lightning.pytorch import seed_everything
-
         from hydra.utils import instantiate
+        from lightning.pytorch import seed_everything
 
         from ..lightning import build_trainer
         from ..lightning.probe import build_probe_dataloaders, load_probe_frames

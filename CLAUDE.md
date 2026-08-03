@@ -98,6 +98,24 @@ config. That is strictly weaker — it is what missed both bugs above.
   `configs/model/**`, `configs/paths/**` and `configs/profile/**` are protected from `copier update`
   (`_skip_if_exists`); `__main__.py` and the other config groups are not.
 
+### Agent-facing docs are part of the payload
+
+`template/CLAUDE.md.jinja` and `template/docs/PORTING-A-MODEL.md.jinja` render into every generated repo.
+That is the point of them: the rules an agent breaks first (the stub is deliberate, `src/meds_model_base/`
+is overwritten by `copier update`, the dispatcher calls `__call__` not `run`) and the porting procedure
+were only ever written *here*, where a port never looks. `meds-eic-ar-ft` was done with neither in reach.
+
+They divide by lifetime, and the split is worth preserving. The rendered `CLAUDE.md` is loaded into every
+session in that repo forever, so it holds only what stays true — ownership, the contract's load-bearing
+rules, how to read the skips. `docs/PORTING-A-MODEL.md` is a one-time procedure with a deliverable, so it
+is a linked document with a hard trigger sentence in `CLAUDE.md` rather than inline text every later
+session pays for.
+
+Neither is in `_skip_if_exists`: contract changes have to reach existing repos, and `copier update`
+3-way merges them. Note also that the rendered `CLAUDE.md` only *asks* for the implementation report — a
+document cannot enforce it. The check that would (a report linter gating CI on `is_stub` being gone) does
+not exist yet.
+
 ### The template ships no model
 
 `model.py` is a **stub**: it declares the hooks the chosen DAG calls and raises `NotImplementedError` from
@@ -138,7 +156,8 @@ A model declares support via `COMMANDS: dict[CommandName, type[MEDSModelCommand]
 because the dispatcher needs it before Hydra composes anything.
 
 Adding or renaming a command touches: the ABC in `commands/base.py`, a `configs/<command>.yaml` root, the
-`entries` table in `commands.py.jinja`, and `PROFILE_COMMANDS` + `ALL_COMMANDS` in `tests/test_render.py`.
+`entries` table in `commands.py.jinja`, the chain block in `CLAUDE.md.jinja`, and `PROFILE_COMMANDS` +
+`ALL_COMMANDS` in `tests/test_render.py`.
 
 ### Manifests are read, not just written
 
@@ -197,10 +216,10 @@ There is one profile per chain in `docs/design-interface.md`: `supervised`, `fin
 adding a profile, and `tests/test_render.py::test_every_command_class_is_reachable` fails if a command
 class exists that no profile registers — which is how `MaterializedPredictCommand` was caught sitting dead.
 
-`copier.yml`'s `implements_*` booleans now gate only the `custom` profile. Nine files branch on `profile`:
+`copier.yml`'s `implements_*` booleans now gate only the `custom` profile. Ten files branch on `profile`:
 `commands.py.jinja`, `model.py.jinja`, the conditional `predict.py` filename, `configs/model/default.yaml`,
 `configs/model/probe.yaml`, `configs/supervised_train.yaml`, `configs/profile/default.yaml`,
-`model.yaml.jinja`, and `README.md.jinja`.
+`model.yaml.jinja`, `README.md.jinja`, and `CLAUDE.md.jinja`.
 
 `commands.py.jinja` builds an `entries` list in Jinja and derives its import block from it, so a profile
 can never import a class it does not register (an F401 in the generated repo).
@@ -219,8 +238,20 @@ byte-compiling it, it asserts four properties that each caught a real bug:
 - `test_every_consumed_artifact_is_produced` — required sources have producers, and `infer` output is
   consumed. Parsed with `ast`, not regex: `supported_sources` is declared in some classes and inherited in
   others, and a regex loose enough to span a class body matches the *next* class's declaration.
-- `test_rendered_repo_passes_ruff` — this repo excludes `template/` from linting, so without it the
-  vendored contract is never linted here at all.
+- `test_rendered_repo_is_clean_as_written` — this repo excludes `template/` from linting, so without it
+  the vendored contract is never linted here at all. It renders with `skip_tasks=True`: `copier.yml`'s
+  post-copy `uvx ruff check --fix` would otherwise repair the payload a second before the test measured
+  it, which is exactly how four defects survived (unsorted imports in `train.py`, `test_cli_smoke.py` and
+  `test_smoke_pipeline.py`; four unused imports in the `packaged` stub; and, once `ruff format --check`
+  was asserted alongside `check`, 12 more files). The trailing-newline test skips the tasks for the same
+  reason. Formatting is worth asserting rather than leaving to the post-copy task because Jinja produces
+  artefacts nothing else catches: a conditional paragraph inside a docstring leaves `"""Summary.\n """`,
+  which ruff collapses to one line in exactly the profiles where the branch is off, so `model.py` was
+  malformed for four of the seven profiles and correct for the other three.
+
+A fifth, `test_claude_md_states_the_same_chain`, guards drift rather than a bug already made: the DAG is
+now written down three times (`commands.py`, `configs/profile/default.yaml`, `CLAUDE.md`), and the third
+is the one an agent reads instead of the code.
 
 `tests/` in a **generated** repo is the conformance suite for the user's model: CLI/workspace/arbitration
 tests that run immediately, plus `test_smoke_pipeline` and `test_property` (designed signal + negative

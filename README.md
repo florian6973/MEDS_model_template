@@ -113,6 +113,10 @@ produced is left unconsumed.
   **`model.yaml`/`requirements.txt`** for MEDS-DEV, and a **conformance test suite**: CLI and workspace
   tests that run immediately, plus end-to-end and designed-signal learnability tests that skip while
   `model.py` is a stub and start running the moment you implement it.
+- **`CLAUDE.md` and `docs/PORTING-A-MODEL.md`** — written for a coding agent working in the generated
+  repo: which files it owns, which `copier update` overwrites, the contract rules that look like details
+  and are not, and — if it is reimplementing a published model — the required ledger of what was ported,
+  adapted, or omitted.
 
 ## Configuration
 
@@ -132,6 +136,9 @@ copier update            # 3-way merge: pulls the new contract into src/meds_mod
 - [`docs/design-interface.md`](docs/design-interface.md) — the authoritative command and artifact specification.
 - [`docs/DESIGN.md`](docs/DESIGN.md) — background on the MEDS-ecosystem APIs this is built on. Note that
   its command vocabulary predates `docs/design-interface.md`.
+- [`template/docs/PORTING-A-MODEL.md.jinja`](template/docs/PORTING-A-MODEL.md.jinja) — the procedure for
+  reimplementing a published model, and the implementation report it requires. It lives in the payload
+  because it is only useful where the port happens: it renders into every generated repo as `docs/`.
 
 ## License
 

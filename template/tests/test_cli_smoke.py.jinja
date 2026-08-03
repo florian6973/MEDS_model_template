@@ -4,11 +4,11 @@ Catches config-path / resolver-registration / structured-config regressions chea
 Also pins the two properties the dispatcher is responsible for: it lists exactly the supported commands,
 and it refuses an unsupported one instead of failing somewhere deeper.
 """
+
 import subprocess
 from importlib.resources import files
 
 import pytest
-
 from meds_model_base.commands import CommandName
 
 from {{ model_slug }}.commands import COMMANDS

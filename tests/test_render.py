@@ -59,8 +59,13 @@ SOURCE_PRODUCER = {
 COMMAND_CONFIGS = sorted(ALL_COMMANDS)
 
 
-def _render(dst: Path, profile: str, **answers) -> str:
-    """Render ``profile`` into ``dst``; return the model slug. ``answers`` overrides other questions."""
+def _render(dst: Path, profile: str, skip_tasks: bool = False, **answers) -> str:
+    """Render ``profile`` into ``dst``; return the model slug. ``answers`` overrides other questions.
+
+    ``skip_tasks`` suppresses the post-copy tasks, which is how a test asserts something about the
+    *payload* rather than about the payload plus whatever `uvx ruff --fix` rewrote afterwards. See
+    ``test_rendered_repo_is_clean_as_written``.
+    """
     from copier import run_copy
 
     slug = f"m_{profile}"
@@ -70,6 +75,7 @@ def _render(dst: Path, profile: str, **answers) -> str:
         data={"model_slug": slug, "model_name": f"Demo {profile}", "profile": profile, **answers},
         defaults=True,
         unsafe=True,  # allow post-gen tasks (git init + best-effort `uvx ruff`, both no-ops if unavailable)
+        skip_tasks=skip_tasks,
         quiet=True,
     )
     return slug
@@ -90,6 +96,11 @@ def test_render_profile(tmp_path, profile, commands):
     for rel in [
         "pyproject.toml",
         "README.md",
+        # The agent-facing pair: the always-loaded contract summary, and the porting procedure it makes
+        # non-optional. Both are only useful if they travel with the render — the knowledge they carry
+        # lived in the template repo until they did, where a port never saw it.
+        "CLAUDE.md",
+        "docs/PORTING-A-MODEL.md",
         "model.yaml",
         ".copier-answers.yml",
         f"src/{slug}/__main__.py",
@@ -155,6 +166,29 @@ def test_declared_chain_matches_registry(tmp_path, profile, commands):
 
     assert cfg["profile"]["name"] == profile
     assert set(cfg["profile"]["chain"]) == set(_registry(dst, slug)) == commands
+
+
+@pytest.mark.parametrize("profile,commands", sorted(PROFILE_COMMANDS.items()))
+@pytest.mark.render
+def test_claude_md_states_the_same_chain(tmp_path, profile, commands):
+    """``CLAUDE.md`` states the DAG a third time, so it is asserted equal like the other two.
+
+    It is loaded into every agent session in a generated repo, which makes a stale chain there worse than
+    a stale chain in a document nobody opens: it is the description the agent acts on instead of reading
+    ``commands.py``.
+    """
+    dst = tmp_path / f"claude_{profile}"
+    slug = _render(dst, profile)
+    text = (dst / "CLAUDE.md").read_text()
+
+    chain = text.split("This DAG's chain:\n\n", 1)[1].split("\n\n", 1)[0]
+    assert {c for c in ALL_COMMANDS if f"`{c}`" in chain} == commands, (
+        f"{profile}: the chain in CLAUDE.md disagrees with commands.py:\n{chain}"
+    )
+
+    # A path the agent cannot open is worse than no path: it reads as a file that was deleted.
+    assert f"src/{slug}/model.py" in text
+    assert (dst / "docs/PORTING-A-MODEL.md").is_file(), "CLAUDE.md links the porting procedure"
 
 
 @pytest.mark.parametrize("profile", sorted(PROFILE_COMMANDS))
@@ -326,20 +360,36 @@ def test_rendered_tests_are_importable(tmp_path, profile):
 
 @pytest.mark.parametrize("profile", sorted(PROFILE_COMMANDS))
 @pytest.mark.render
-def test_rendered_repo_passes_ruff(tmp_path, profile):
-    """The rendered repo must pass its *own* ruff config.
+def test_rendered_repo_is_clean_as_written(tmp_path, profile):
+    """The rendered repo must pass its *own* ruff config **without** the post-copy tasks.
 
     This repo excludes ``template/`` from linting (it is not valid Python until rendered), so without this
     the vendored contract is never linted here at all — only in a generated repo's CI, one commit too late.
+
+    ``skip_tasks`` is the load-bearing part. ``copier.yml`` runs a best-effort ``uvx ruff check --fix`` and
+    ``uvx ruff format`` after a copy, so rendering normally and *then* linting checks a file ruff already
+    repaired a second earlier — the test passes and the payload stays dirty. That is how four defects
+    survived here: unsorted imports in ``train.py``, ``test_cli_smoke.py`` and ``test_smoke_pipeline.py``,
+    and four unused imports in the ``packaged`` model stub. They are only visible where the post-copy task
+    cannot run, which ``copier.yml`` explicitly supports ("skipped cleanly if offline") — and there a fresh
+    repo fails its own CI and pre-commit on the first commit.
+
+    ``format`` is asserted too, because ``uvx ruff format`` masks it the same way and Jinja produces
+    formatting artefacts nothing else catches: a conditional paragraph inside a docstring leaves a
+    ``\"\"\"Summary.\\n        \"\"\"`` that ruff collapses to one line in exactly the profiles where the
+    branch is off.
     """
     ruff = shutil.which("ruff")
     if ruff is None:  # pragma: no cover - depends on the environment
         pytest.skip("ruff is not installed")
 
     dst = tmp_path / f"lint_{profile}"
-    _render(dst, profile)
-    result = subprocess.run([ruff, "check", "--no-cache", "."], cwd=dst, capture_output=True, text=True)
-    assert result.returncode == 0, f"ruff failed on the rendered {profile} repo:\n{result.stdout}"
+    _render(dst, profile, skip_tasks=True)
+    for args in (["check"], ["format", "--check"]):
+        result = subprocess.run([ruff, *args, "--no-cache", "."], cwd=dst, capture_output=True, text=True)
+        assert result.returncode == 0, (
+            f"`ruff {args[0]}` failed on the rendered {profile} payload:\n{result.stdout}"
+        )
 
 
 @pytest.mark.parametrize("profile", sorted(PROFILE_COMMANDS))
@@ -367,7 +417,7 @@ def test_rendered_files_end_with_exactly_one_newline(tmp_path, profile):
     `.copier-answers.yml` and `configs/profile/default.yaml` all shipped with a trailing blank line.
     """
     dst = tmp_path / f"eof_{profile}"
-    _render(dst, profile)
+    _render(dst, profile, skip_tasks=True)  # `uvx ruff format` would repair this before it was measured
     offenders = _bad_eof(dst)
     assert not offenders, f"{profile}: files not ending in exactly one newline: {offenders}"
 

@@ -21,14 +21,14 @@ it is set and start running when it is gone; they are the contract your model ha
 ``meds_model_base.lightning.modules`` provides the pieces that must know the MEDS batch format —
 ``CodeEmbedder``, ``padding_mask``, ``masked_mean``. Everything else is yours.
 """
-
+{% if profile != 'packaged' %}
 from collections.abc import Callable
 
 {% if profile == 'probe' %}import lightning.pytorch as L
 {% endif %}from meds_model_base.lightning.modules import BaseLightningModule
 from meds_torchdata import MEDSTorchBatch
 from torch import Tensor
-{% if profile == 'packaged' %}
+{% endif %}{% if profile == 'packaged' %}
 
 class Model:
     """This profile ships trained weights with the repository, so there is no module to train.
@@ -65,11 +65,11 @@ class Model(BaseLightningModule):
         self.vocab_size = vocab_size
 
     def compute_loss(self, batch: MEDSTorchBatch) -> tuple[Tensor, dict[str, Tensor]]:
-        """Return ``(loss, metrics)`` for a training batch.
-{% if profile in ['finetune', 'probe'] %}
+        """Return ``(loss, metrics)`` for a training batch.{% if profile in ['finetune', 'probe'] %}
+
         This DAG trains twice. ``batch.has_labels`` distinguishes them: pretraining sees no labels, while
         ``supervised_train`` sees ``batch.boolean_value``.
-{% endif %}        """
+        {% endif %}"""
         raise NotImplementedError("Implement compute_loss in src/{{ model_slug }}/model.py.")
 {% if profile == 'probe' %}
     def encode(self, batch: MEDSTorchBatch) -> Tensor:
@@ -125,4 +125,4 @@ class Probe(L.LightningModule):
 
     def configure_optimizers(self):
         raise NotImplementedError("Implement Probe.configure_optimizers in src/{{ model_slug }}/model.py.")
-{% endif %}
+{% endif -%}

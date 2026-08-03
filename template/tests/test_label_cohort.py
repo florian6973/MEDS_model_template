@@ -9,6 +9,7 @@ through the schema directories, see only the survivors, and succeed. ``predict``
 compare the two and fails with ``CoverageError`` — accurate, but pointing at prediction rather than at the
 preprocessing that caused it, two training runs later.
 """
+
 from datetime import datetime
 
 import polars as pl
