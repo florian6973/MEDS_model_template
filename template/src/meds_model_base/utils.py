@@ -11,6 +11,7 @@ Kept dependency-light (omegaconf only at module load; lightning imported lazily)
 from __future__ import annotations
 
 import logging
+import os
 import shutil
 from pathlib import Path
 
@@ -19,8 +20,39 @@ logger = logging.getLogger(__name__)
 #: Name of the checkpoint copied into a published model artifact.
 BEST_CKPT_FILENAME = "checkpoint"
 
+#: cuBLAS workspace layout required for deterministic matmuls on CUDA. See :func:`configure_cublas_workspace`.
+CUBLAS_WORKSPACE_CONFIG = ":4096:8"
+
 #: Suffix for the scratch directory holding in-progress training state.
 WORK_DIR_SUFFIX = ".work"
+
+
+def configure_cublas_workspace() -> str:
+    """Set ``CUBLAS_WORKSPACE_CONFIG`` so strict determinism is *available* on CUDA. Returns the value.
+
+    ``trainer.deterministic=true`` makes Lightning call ``torch.use_deterministic_algorithms(True)``, which
+    raises on CUDA unless this variable is set — and it raises at the first cuBLAS matmul, minutes into a
+    run rather than at startup. Flipping the flag alone is therefore not a usable strict mode, which is why
+    this is set unconditionally rather than only when the flag is on.
+
+    Placement matters, and not in the obvious way. cuBLAS reads this when it creates its workspace, at the
+    first cuBLAS call — *not* at ``import torch`` — so this only has to run before any CUDA work, which is
+    why the dispatcher can call it before composing the config. Do not "fix" this by moving it next to a
+    torch import: by then the dispatcher has already resolved the command class, which imports torch.
+
+    ``setdefault``, so a value the user exported still wins.
+
+    Examples:
+        >>> import os
+        >>> _ = os.environ.pop("CUBLAS_WORKSPACE_CONFIG", None)
+        >>> configure_cublas_workspace()
+        ':4096:8'
+        >>> os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":16:8"
+        >>> configure_cublas_workspace()  # an explicitly exported value wins
+        ':16:8'
+        >>> _ = os.environ.pop("CUBLAS_WORKSPACE_CONFIG", None)
+    """
+    return os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", CUBLAS_WORKSPACE_CONFIG)
 
 
 def work_dir_for(output_dir: Path | str) -> Path:

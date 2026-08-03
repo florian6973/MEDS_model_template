@@ -392,6 +392,49 @@ def test_rendered_repo_is_clean_as_written(tmp_path, profile):
         )
 
 
+@pytest.mark.render
+def test_the_contract_takes_no_position_on_matmul_precision():
+    """The vendored contract must not call ``set_float32_matmul_precision``.
+
+    It used to, unconditionally, with ``"medium"`` — running fp32 matmuls in bfloat16 on Ampere and later.
+    That is stable run-to-run, so it never broke same-machine reproducibility; what it broke was
+    comparison against the source a port is reproducing, silently, from a file `copier update` overwrites.
+
+    Torch's own default is ``highest``, so *not calling it* is the fix. The pull is to re-add it for
+    speed — that belongs in ``model.py``, which the user owns and which the implementation report already
+    requires a ledger row for. ``trainer.precision`` is the sanctioned knob.
+    """
+    payload = REPO / "template/src/meds_model_base"
+    offenders = [
+        str(fp.relative_to(REPO))
+        for fp in sorted(payload.rglob("*.py"))
+        if "set_float32_matmul_precision" in fp.read_text()
+    ]
+    assert not offenders, f"the contract must not set matmul precision: {offenders}"
+
+
+#: Keys `configs/trainer/default.yaml` must carry. Each is listed rather than left to Lightning's default
+#: because configs are struct mode: an absent key needs Hydra's `+` to override, which nobody guesses.
+TRAINER_REPRODUCIBILITY_KEYS = {"deterministic": "warn", "benchmark": False, "precision": "32-true"}
+
+
+@pytest.mark.parametrize("profile", sorted(PROFILE_COMMANDS))
+@pytest.mark.render
+def test_trainer_config_ships_the_determinism_keys(tmp_path, profile):
+    """Seeding alone does not give the same numbers twice on GPU.
+
+    ``seed_everything(seed, workers=True)`` is called and `num_workers` defaults to 0, but without
+    ``deterministic`` cuDNN autotunes by timing and picks non-deterministic kernels — so two runs at one
+    seed can disagree, which is exactly the check `docs/PORTING-A-MODEL.md` Step 6 requires a port to pass.
+    """
+    dst = tmp_path / f"determinism_{profile}"
+    slug = _render(dst, profile)
+    cfg = yaml.safe_load((dst / f"src/{slug}/configs/trainer/default.yaml").read_text())
+
+    for key, expected in TRAINER_REPRODUCIBILITY_KEYS.items():
+        assert cfg.get(key) == expected, f"trainer/default.yaml: {key} should be {expected!r}"
+
+
 @pytest.mark.parametrize("profile", sorted(PROFILE_COMMANDS))
 @pytest.mark.render
 def test_rendered_configs_parse(tmp_path, profile):
