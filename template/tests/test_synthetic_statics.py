@@ -89,6 +89,40 @@ def test_statics_carry_no_information_about_the_label(raw):
         assert (code, False) in seen, f"{code} never occurs with a negative label"
 
 
+def test_a_cohort_without_statics_is_refused_before_training(tmp_path_factory):
+    """The half the fixture change does not fix: a *real* cohort with no static measurements.
+
+    Giving the synthetic builders statics stops this suite tripping the collate crash, but it does nothing
+    for a user whose dataset genuinely has no baseline variables — they still hit
+    ``Cannot infer dtype from empty values`` inside the dataloader, naming neither the config key that
+    asked for static data nor the cohort that lacks it. `build_datamodule` is the one place every command
+    constructs a datamodule, so the mismatch is refused there instead, with both ways out named.
+    """
+    from meds_model_base.lightning import build_datamodule, require_statics_if_requested
+    from omegaconf import OmegaConf
+
+    root = tmp_path_factory.mktemp("no_statics")
+    bare = build_signal_dataset(root / "raw", seed=0, with_statics=False, **COHORT)
+    patients = build_workspace(bare, root / "data") / "patients"
+
+    cfg = OmegaConf.create(
+        {
+            "datamodule": {
+                "config": {"tensorized_cohort_dir": str(patients), "static_inclusion_mode": "INCLUDE"}
+            }
+        }
+    )
+    with pytest.raises(ValueError, match=r"no subject in .* has any static measurement"):
+        require_statics_if_requested(cfg)
+    # …and it is reached through the function every command actually calls, not only directly.
+    with pytest.raises(ValueError, match=r"static_inclusion_mode=OMIT"):
+        build_datamodule(cfg)
+
+    # OMIT is the documented way out, and must not be blocked by the check.
+    cfg.datamodule.config.static_inclusion_mode = "OMIT"
+    require_statics_if_requested(cfg)
+
+
 def test_a_batch_collates_with_statics_included(raw, tmp_path):
     """The regression itself: `INCLUDE` must survive collation, and the tensors must be populated.
 
