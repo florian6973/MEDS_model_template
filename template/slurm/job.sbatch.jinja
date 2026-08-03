@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# One SLURM job = one `meds-model` invocation for {{ model_name }}.
+#
+# Resources are passed by `slurm/submit.sh` on the sbatch command line rather than declared in #SBATCH
+# lines here, because they differ per stage (preprocess_data wants no GPU, training does) and command-line
+# flags win over the file. What is left here is only what is the same for every stage.
+#
+# Run it directly for a one-off:
+#   sbatch --partition=gpu --gres=gpu:1 --time=8:00:00 slurm/job.sbatch supervised_train input_data_dir=...
+#SBATCH --job-name=meds-model
+#SBATCH --output=slurm-logs/%x-%j.out
+#SBATCH --error=slurm-logs/%x-%j.out
+
+set -euo pipefail
+
+cd "${SLURM_SUBMIT_DIR:-$PWD}"
+# shellcheck source=config.sh
+source slurm/config.sh
+
+# Array mode: `submit.sh --tasks-file` leaves `@LABELS@` / `@TASK@` in the arguments and lets each array
+# element resolve them from its own line of the task list. Doing the substitution here rather than at
+# submit time is what lets one submitted job cover N tasks.
+if [ -n "${TASKS_FILE:-}" ] && [ -n "${SLURM_ARRAY_TASK_ID:-}" ]; then
+  labels=$(sed -n "${SLURM_ARRAY_TASK_ID}p" "$TASKS_FILE")
+  if [ -z "$labels" ]; then
+    echo "slurm/job.sbatch: no entry $SLURM_ARRAY_TASK_ID in $TASKS_FILE" >&2
+    exit 1
+  fi
+  task=$(basename "$labels")
+  set -- "${@//@LABELS@/$labels}"
+  set -- "${@//@TASK@/$task}"
+fi
+
+if [ -n "$SETUP" ]; then
+  eval "$SETUP"
+fi
+
+echo "[$(date -Is)] host=$(hostname) job=${SLURM_JOB_ID:-none} array=${SLURM_ARRAY_TASK_ID:-none}"
+echo "[$(date -Is)] meds-model $*${OVERRIDES:+ $OVERRIDES}"
+
+# `srun` so the work shows up as a job step in sacct, and so a `scancel` reaches the process.
+# shellcheck disable=SC2086  # OVERRIDES is a deliberately word-split list of Hydra overrides
+srun --unbuffered meds-model "$@" $OVERRIDES

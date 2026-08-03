@@ -109,6 +109,10 @@ produced is left unconsumed.
   arbitration, the `meds-model` dispatcher, the manifest layer, default command implementations
   (MEDS-transforms + meds-torch-data + Lightning + ACES + meds-evaluation), schema validators, and a small
   MEDS-batch adapter layer. `copier update` re-renders it. **It contains no models.**
+- **`slurm/`** — sbatch scripts that queue the model's chain one job per command, chained with
+  `--dependency`, with a job-array mode for a fan of tasks. The stage list comes from
+  `meds-model commands` at submit time, so it follows the model's DAG rather than a copy of it; only
+  `slurm/config.sh` (partitions, account, paths) is meant to be edited.
 - **Hydra configs** (one root per command, plus a shared `paths` group), **CI**, **pre-commit**, a
   **`model.yaml`/`requirements.txt`** for MEDS-DEV, and a **conformance test suite**: CLI and workspace
   tests that run immediately, plus end-to-end and designed-signal learnability tests that skip while

@@ -98,6 +98,26 @@ config. That is strictly weaker — it is what missed both bugs above.
   `configs/model/**`, `configs/paths/**` and `configs/profile/**` are protected from `copier update`
   (`_skip_if_exists`); `__main__.py` and the other config groups are not.
 
+### The SLURM helpers derive the chain, they do not restate it
+
+`template/slurm/` renders into every generated repo. `submit.sh` gets its *stage list* from
+`meds-model commands` at submit time rather than from a rendered copy, which is what keeps it out of the
+set of places the DAG is written down (`commands.py`, `configs/profile/default.yaml`, `CLAUDE.md` — three
+already, guarded by `test_claude_md_states_the_same_chain`).
+
+What it does duplicate is the *argument wiring* per command, which is the same knowledge as
+`meds_model_base.testing.harness.run_chain`. That is guarded instead:
+`test_slurm_submitter_covers_every_command` asserts `stage_args()`'s case arms equal `ALL_COMMANDS` and
+that every source parameter in `SOURCE_PRODUCER` appears. Adding or renaming a command therefore also
+touches `template/slurm/submit.sh.jinja`.
+
+Shell has no equivalent of the byte-compile the Python payload gets, so
+`test_slurm_scripts_render_as_runnable_bash` runs `bash -n` over the rendered scripts for every profile and
+checks the executable bit survived rendering (Copier preserves file mode; the payload files are `chmod +x`).
+
+One Jinja trap, already paid for once: `${` immediately followed by `#` — as in `${#array[@]}` — opens a
+Jinja comment tag and breaks the render of *every* profile. Use `${array[0]:-}` or an explicit `{{ '{#' }}`.
+
 ### Agent-facing docs are part of the payload
 
 `template/CLAUDE.md.jinja` and `template/docs/PORTING-A-MODEL.md.jinja` render into every generated repo.

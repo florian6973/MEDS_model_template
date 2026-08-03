@@ -85,6 +85,20 @@ meds-model predict         input_data_dir=runs/data external_labels_dir=$LABELS_
 Any extra argument is a Hydra override, e.g.
 `meds-model supervised_train trainer.max_epochs=50 model.d_model=128`.
 
+### On a SLURM cluster
+
+A real training budget is a cluster job, not a laptop one, so the chain above also ships as sbatch scripts:
+
+```bash
+$EDITOR slurm/config.sh       # partitions, account, MEDS_ROOT, LABELS_DIR, RUN_DIR, SETUP
+./slurm/submit.sh --dry-run   # print the sbatch commands
+./slurm/submit.sh             # queue the whole chain, one job per command, chained with --dependency
+```
+
+`preprocess_data` is queued without a GPU and everything else with one; a fan of tasks becomes a job array
+(`--tasks-file`). The stage list comes from `meds-model commands`, so it follows this model's DAG rather
+than a copy of it. See [`slurm/README.md`](slurm/README.md).
+
 ### Logging
 
 `pretrain` and `supervised_train` take a `logger` config group; `configs/logger/<name>.yaml` is what makes

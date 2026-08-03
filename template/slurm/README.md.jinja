@@ -1,0 +1,99 @@
+# Running {{ model_name }} on a SLURM cluster
+
+Three files, and only the first is meant to be edited:
+
+| file | what it is |
+|---|---|
+| `config.sh` | site and run settings — partitions, account, paths, what to run before `meds-model`. **Edit this.** |
+| `job.sbatch` | one job = one `meds-model` invocation. Stage-independent; resources arrive on the command line. |
+| `submit.sh` | queues the whole chain with `--dependency` between stages, and optionally as a job array over tasks. |
+
+## Quick start
+
+```bash
+$EDITOR slurm/config.sh          # MEDS_ROOT, LABELS_DIR, RUN_DIR, PARTITION_*, ACCOUNT, SETUP
+./slurm/submit.sh --dry-run      # read the sbatch commands before anything is queued
+./slurm/submit.sh
+```
+
+`--dry-run` is worth using every time the config changes: it prints exactly what would be submitted, so a
+wrong partition or a typo'd path costs nothing instead of a queue slot and a failed job.
+
+## What it submits
+
+The stage list comes from `meds-model commands`, so this follows whatever DAG this model registers —
+{% if profile == 'supervised' %}here `preprocess_data → supervised_train → predict`.
+{% elif profile == 'finetune' %}here `preprocess_data → pretrain → supervised_train → predict`.
+{% elif profile == 'probe' %}here `preprocess_data → pretrain → infer → supervised_train → predict`.
+{% elif profile == 'zero_shot_direct' %}here `preprocess_data → pretrain → predict`.
+{% elif profile == 'zero_shot_materialized' %}here `preprocess_data → pretrain → infer → predict`.
+{% elif profile == 'packaged' %}here `preprocess_data → predict`.
+{% else %}run `meds-model commands` to see it.
+{% endif %}
+Each stage becomes one job, chained with `--dependency=afterok`, so a failure stops the rest of the chain
+rather than running the next stage against a missing artifact.
+
+`preprocess_data` gets `PARTITION_CPU` and no GPU — it shells out to MEDS-transforms and meds-torch-data
+and never builds a model. Everything else gets `PARTITION_GPU` and `--gres=gpu:$GPUS`. Set `GPUS=0` to put
+the whole chain on CPU.
+
+Artifacts land under `$RUN_DIR`:
+
+```
+$RUN_DIR/data/                       # patients/ — built once, shared by every task
+$RUN_DIR/models/pretrained/          # task-free, so also built once (profiles with `pretrain`)
+$RUN_DIR/<task>/models/supervised/   # per task
+$RUN_DIR/<task>/predictions/         # per task
+```
+
+Job output goes to `slurm-logs/<job-name>-<jobid>.out`.
+
+## Several tasks at once
+
+A model is trained per task, not per horizon or per endpoint — the task lives in `external_labels_dir`. To
+run a fan of them, list the label directories one per line and submit an array:
+
+```bash
+printf '%s\n' /labels/mortality_24h /labels/mortality_48h /labels/mortality_72h > tasks.txt
+./slurm/submit.sh --tasks-file tasks.txt
+```
+
+The task-free stages (`preprocess_data`, and `pretrain` where the DAG has it) are still submitted **once**;
+only the task-dependent ones become array elements, and they are chained with `--dependency=aftercorr`, so
+task *N*'s `predict` waits on task *N*'s training rather than on all of them. `<task>` in the paths above
+is the basename of each labels directory.
+
+## Overrides
+
+Anything after `--` is appended to every `meds-model` invocation as a Hydra override:
+
+```bash
+./slurm/submit.sh -- trainer.max_epochs=200 batch_size=64
+```
+
+For settings that should always apply on this cluster, use `OVERRIDES` in `config.sh` instead.
+
+**`num_workers` is deliberately not derived from `$CPUS`.** Changing the worker count changes the order in
+which the dataloader consumes the RNG, so two runs that differ only in `num_workers` are not comparable
+even at the same seed. Set it once, on purpose, and record it next to your results.
+
+## Reruns
+
+Artifacts are immutable: a stage whose output directory already exists fails rather than overwriting it.
+That is deliberate — it is what makes a directory that exists a directory that finished. To replace one,
+either point `RUN_DIR` somewhere new or pass `-- do_overwrite=true`.
+
+Individual stages can be re-run on their own once their inputs exist:
+
+```bash
+./slurm/submit.sh --only supervised_train -- do_overwrite=true
+```
+
+## Notes
+
+- `submit.sh` runs `meds-model commands` on the login node, so `SETUP` has to work there too. If your
+  cluster forbids that, run `--dry-run` on a compute node and submit the printed commands.
+- Paths containing spaces are passed through correctly by `submit.sh`, but `OVERRIDES` is word-split by
+  design (it is a list of Hydra overrides), so keep spaces out of it.
+- `--dependency=aftercorr` requires the two arrays to have the same index range; that holds here because
+  both come from the same task list.

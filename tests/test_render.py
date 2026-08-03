@@ -103,6 +103,13 @@ def test_render_profile(tmp_path, profile, commands):
         "docs/PORTING-A-MODEL.md",
         "model.yaml",
         ".copier-answers.yml",
+        # The cluster helpers travel with the render for the same reason the docs do: a 500-epoch run is
+        # not a laptop job, and writing the sbatch wiring per model is how it gets written differently
+        # per model.
+        "slurm/config.sh",
+        "slurm/job.sbatch",
+        "slurm/submit.sh",
+        "slurm/README.md",
         f"src/{slug}/__main__.py",
         f"src/{slug}/model.py",
         f"src/{slug}/commands.py",
@@ -329,6 +336,154 @@ def test_every_command_class_is_reachable():
 
     unreachable = defaults - abstract - registered
     assert not unreachable, f"command classes no profile registers: {sorted(unreachable)}"
+
+
+def _shell_function(text: str, name: str) -> str:
+    """The body of a ``name() { … }`` shell function, delimited by its closing brace at column 0."""
+    start = text.index(f"{name}() {{")
+    return text[start : text.index("\n}\n", start)]
+
+
+@pytest.mark.render
+def test_slurm_submitter_covers_every_command():
+    """``slurm/submit.sh`` knows the arguments of every command, not just the ones today's profiles use.
+
+    The submitter derives its *stage list* from ``meds-model commands`` at runtime, so the DAG cannot
+    drift. Its *argument wiring* is a second copy of what
+    ``meds_model_base.testing.harness.run_chain`` encodes, and that one can: a sixth command, or a renamed
+    source parameter, would leave the submitter quietly building a job with the wrong flags — which fails
+    on a compute node, hours into a queue, rather than here.
+    """
+    submitter = (REPO / "template/slurm/submit.sh.jinja").read_text()
+    arms = set(re.findall(r"^    (\w+)\)$", _shell_function(submitter, "stage_args"), re.M))
+    assert arms == ALL_COMMANDS, f"slurm/submit.sh's stage_args() handles {sorted(arms)}"
+
+    # Every source parameter the contract arbitrates has to be spelled the same way here.
+    for source in SOURCE_PRODUCER:
+        assert source in submitter, f"slurm/submit.sh never passes {source}"
+
+
+@pytest.mark.parametrize("profile", sorted(PROFILE_COMMANDS))
+@pytest.mark.render
+def test_slurm_scripts_render_as_runnable_bash(tmp_path, profile):
+    """The rendered SLURM helpers parse as bash and keep their executable bit.
+
+    Jinja renders these like any other payload file, so a conditional block can leave a script
+    syntactically broken in exactly the profiles where the branch is off — and a shell script has no
+    equivalent of the byte-compile the Python payload gets. ``bash -n`` is that check.
+    """
+    if not shutil.which("bash"):  # pragma: no cover - bash is present everywhere this runs
+        pytest.skip("bash not available")
+    dst = tmp_path / profile
+    _render(dst, profile, skip_tasks=True)
+
+    for rel in ["slurm/config.sh", "slurm/job.sbatch", "slurm/submit.sh", "slurm/README.md"]:
+        assert (dst / rel).is_file(), f"missing rendered file: {rel}"
+
+    for rel in ["slurm/job.sbatch", "slurm/submit.sh"]:
+        assert os.access(dst / rel, os.X_OK), f"{rel} rendered without its executable bit"
+        result = subprocess.run(["bash", "-n", str(dst / rel)], capture_output=True, text=True)
+        assert result.returncode == 0, f"{rel} is not valid bash:\n{result.stderr}"
+
+    # `config.sh` is sourced by both the submitter and the job, so it must be sourceable on its own.
+    result = subprocess.run(
+        ["bash", "-c", f'set -u; source "{dst / "slurm/config.sh"}"; echo "$RUN_DIR"'],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, f"slurm/config.sh is not sourceable:\n{result.stderr}"
+    assert result.stdout.strip(), "slurm/config.sh left RUN_DIR empty"
+
+
+def _dry_run_submit(dst: Path, tmp_path: Path, commands: set[str], *extra: str):
+    """Run the rendered ``slurm/submit.sh --dry-run`` and return its emitted sbatch command lines.
+
+    A fake ``meds-model`` on PATH supplies the stage list, so this exercises the submitter's real logic —
+    argument wiring, resource split, dependency chaining — without installing torch or having a scheduler.
+    """
+    dag_order = ["preprocess_data", "pretrain", "infer", "supervised_train", "predict"]
+    ordered = [c for c in dag_order if c in commands]
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    fake = bin_dir / "meds-model"
+    fake.write_text("#!/usr/bin/env bash\nprintf '%s\\n' " + " ".join(ordered) + "\n")
+    fake.chmod(0o755)
+
+    for name in ("meds", "labels_mortality_24h", "labels_mortality_48h"):
+        (tmp_path / name).mkdir(exist_ok=True)
+
+    env = {
+        **os.environ,
+        "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+        "SETUP": "",  # nothing to activate; the fake meds-model is already on PATH
+        "MEDS_ROOT": str(tmp_path / "meds"),
+        "LABELS_DIR": str(tmp_path / "labels_mortality_24h"),
+        "RUN_DIR": str(tmp_path / "runs"),
+    }
+    result = subprocess.run(
+        ["./slurm/submit.sh", "--dry-run", *extra], cwd=dst, env=env, capture_output=True, text=True
+    )
+    assert result.returncode == 0, f"submit.sh --dry-run failed:\n{result.stdout}\n{result.stderr}"
+    return ordered, [line for line in result.stdout.splitlines() if line.strip()]
+
+
+@pytest.mark.parametrize("profile,commands", sorted(PROFILE_COMMANDS.items()))
+@pytest.mark.render
+def test_slurm_submitter_builds_one_chained_job_per_command(tmp_path, profile, commands):
+    """`--dry-run` emits one sbatch per registered command, in order, each depending on the last.
+
+    `bash -n` only proves the script parses. This proves it builds the jobs the DAG actually needs — which
+    is the part that otherwise fails on a compute node, hours into a queue.
+    """
+    if not shutil.which("bash"):  # pragma: no cover - bash is present everywhere this runs
+        pytest.skip("bash not available")
+    dst = tmp_path / profile
+    _render(dst, profile, skip_tasks=True)
+    ordered, lines = _dry_run_submit(dst, tmp_path, commands)
+
+    assert len(lines) == len(ordered), "expected one job per command, got:\n" + "\n".join(lines)
+    for i, (line, command) in enumerate(zip(lines, ordered, strict=True)):
+        assert f"slurm/job.sbatch {command} " in line, f"job {i} does not run {command}: {line}"
+        # A failed stage must not leave the next one running against a missing artifact.
+        assert ("--dependency=" in line) is (i > 0), f"job {i} has the wrong dependency wiring: {line}"
+        # preprocess_data shells out to MEDS-transforms and MTD; it never builds a model.
+        assert ("--gres=gpu:" in line) is (command != "preprocess_data"), f"wrong resources: {line}"
+
+    # Exactly one prior artifact is ever passed — supplying two is an error, not a precedence decision.
+    for line in lines:
+        assert sum(source in line for source in SOURCE_PRODUCER) <= 1, f"two input sources: {line}"
+
+
+@pytest.mark.parametrize("profile,commands", sorted(PROFILE_COMMANDS.items()))
+@pytest.mark.render
+def test_slurm_task_fan_arrays_only_the_task_dependent_stages(tmp_path, profile, commands):
+    """`--tasks-file` arrays the task-dependent stages and leaves the shared ones submitted once.
+
+    `patients/` and a pretrained model are task-free by construction, so building them per task would be
+    the same work N times over — and would write N copies of an artifact the workspace is designed to
+    share.
+    """
+    if not shutil.which("bash"):  # pragma: no cover - bash is present everywhere this runs
+        pytest.skip("bash not available")
+    dst = tmp_path / profile
+    _render(dst, profile, skip_tasks=True)
+
+    tasks = tmp_path / "tasks.txt"
+    tasks.write_text(f"{tmp_path / 'labels_mortality_24h'}\n{tmp_path / 'labels_mortality_48h'}\n")
+    ordered, lines = _dry_run_submit(dst, tmp_path, commands, "--tasks-file", str(tasks))
+
+    task_scoped = {"infer", "supervised_train", "predict"}
+    previous_was_array = False
+    for line, command in zip(lines, ordered, strict=True):
+        is_array = "--array=1-2" in line
+        assert is_array is (command in task_scoped), f"{command} arrayed wrongly: {line}"
+        if is_array:
+            assert "TASKS_FILE=" in line, f"{command} array cannot resolve its task: {line}"
+            # Element-wise chaining: task N's predict waits on task N's training, not on all of them.
+            expected = "aftercorr" if previous_was_array else "afterok"
+            if "--dependency=" in line:
+                assert expected in line, f"{command} should chain with {expected}: {line}"
+        previous_was_array = is_array
 
 
 @pytest.mark.parametrize("profile", sorted(PROFILE_COMMANDS))
