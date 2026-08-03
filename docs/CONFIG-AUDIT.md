@@ -50,7 +50,8 @@ Three keys look inert and are not:
 - **`callbacks`** — `instantiate_group` branches on the node being empty, not on its value. Benign, but
   note that dropping `model_checkpoint` silently changes which weights get published (see
   `_persist_checkpoint`, §2).
-- **`trainer.deterministic` / `trainer.benchmark`** — the exception to "nothing here can be quietly
+- **~~`trainer.deterministic` / `trainer.benchmark`~~ Fixed; both now ship in `trainer/default.yaml`
+  alongside an explicit `precision`.** The exception to "nothing here can be quietly
   wrong", and the reason `trainer.*` is qualified above. Neither appears in
   `configs/trainer/default.yaml`, so Lightning runs with `deterministic=False` and cuDNN autotunes its
   algorithms by timing. Nothing raises; the run simply is not reproducible, which makes every number it
@@ -96,9 +97,19 @@ These are the ones that matter. "Branch" column gives the exact site.
    The complete fix is to record a config hash in the work directory and refuse to resume when it differs;
    flipping the default buys most of that safety for one line, and the hash can follow if resume is ever
    used in anger.
-2. **Determinism settings** (`trainer.deterministic` / `trainer.benchmark`, §1, plus the hardcoded matmul
-   precision below). Equally silent, and it degrades every other result: two runs at the same seed can
-   disagree, so no measurement in the repository is reproducible evidence of anything.
+2. **~~Determinism settings~~ (`trainer.deterministic` / `trainer.benchmark`, plus the hardcoded matmul
+   precision below). Fixed.** Equally silent, and it degraded every other result: two runs at the same
+   seed could disagree, so no measurement in the repository was reproducible evidence of anything.
+
+   `configs/trainer/default.yaml` now ships `deterministic: warn`, `benchmark: false` and an explicit
+   `precision: 32-true`, and `configure_cublas_workspace()` sets `CUBLAS_WORKSPACE_CONFIG` from the
+   dispatcher so `trainer.deterministic=true` is a usable strict mode on CUDA instead of an error at the
+   first matmul. `precision` is listed rather than left implicit because configs are struct mode: without
+   the key, `trainer.precision=bf16-mixed` needs Hydra's `+` and nobody guesses that.
+
+   What is now claimed, in the generated README and in the porting procedure, is *same seed + same config
+   + same environment → same metric* — not "reproducible". The claim can only be **shipped** here, not
+   **proven**: proving it needs two real training runs, which needs a model (#7).
 3. **`pipeline` / `pipeline_overrides`.** Known broken until 2026-08-01; see §3.
 4. **`attach_labels=false`.** Produces a file `meds_evaluation` rejects. Loud, but nothing tells a user
    the key exists or why they would want it.
@@ -116,13 +127,20 @@ Not config-driven, but in the same blind spot and worth inspecting together:
   manifest, never asserted.
 - `load_pretrained_weights`'s **zero-match `RuntimeError`** (`train.py:280`) — the load-bearing guard of
   the `finetune` profile: it is what stops a renamed encoder from becoming a silent from-scratch run.
-- **`torch.set_float32_matmul_precision("medium")`** (`train.py:60`, and again at `train.py:219`) — set
-  unconditionally, with no config key and no mention in any document. On Ampere and later this runs fp32
-  matmuls in bfloat16. It is stable run-to-run, so it does not break same-machine reproducibility, but it
-  silently diverges from any source implementation that ran at full precision — and because it lives in
-  the vendored contract, a user can only change it by editing a file `copier update` overwrites. For the
-  porting procedure in `template/docs/PORTING-A-MODEL.md.jinja`, whose deliverable is a ledger of
-  deviations that affect results, this is a deviation the template imposes invisibly.
+- **~~`torch.set_float32_matmul_precision("medium")`~~ Removed.** Set unconditionally at `train.py:60` and
+  again at `train.py:219`, with no config key and no mention in any document. On Ampere and later this ran
+  fp32 matmuls in bfloat16 — stable run-to-run, so it did not break same-machine reproducibility, but it
+  silently diverged from any source implementation that ran at full precision, and living in the vendored
+  contract meant a user could only change it by editing a file `copier update` overwrites. For a porting
+  procedure whose deliverable is a ledger of deviations that affect results, that was a deviation the
+  template imposed invisibly.
+
+  Deleting the call was the whole fix: torch's own default is `highest` with `allow_tf32` off, so the
+  contract now simply does not take a position, and the environment matches the one every source
+  implementation ran in. No config key was needed — promoting it to one would have meant carrying it in
+  four command roots (training *and* inference; `zero_shot_direct` and `packaged` never train at all) and
+  keeping them agreed. `trainer.precision` is the sanctioned speed knob, and a port that specifically
+  needs TF32 sets it in `model.py`, which is the user's file and already requires a ledger row.
 - **`CoverageError`** (`predict.py:175`) — reachable in normal use; nothing exercises it.
 - **`InferenceKind.scores` / `MaterializedPredictCommand`** — reachable only through
   `zero_shot_materialized`, which `skip_if_stub`s.

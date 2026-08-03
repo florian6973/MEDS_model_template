@@ -77,7 +77,7 @@ Config paths below are relative to `src/{{ model_slug }}/configs/`.
 | pretraining objective | `Model.compute_loss` when `not batch.has_labels` — delegate to the source's own loss where possible |
 | task objective | `Model.compute_loss` when `batch.has_labels` |
 | optimiser / schedule / LR | `optimizer/*.yaml`, and override `configure_optimizers` if the source groups parameters |
-| seeding / determinism / precision | `seed` in `pretrain.yaml` and `supervised_train.yaml`; `deterministic` and `benchmark` in `trainer/`; matmul precision (hardcoded in the vendored contract today — see [MEDS_model_template#6](https://github.com/florian6973/MEDS_model_template/issues/6)) |
+| seeding / determinism / precision | `seed` in `pretrain.yaml` and `supervised_train.yaml`; `deterministic`, `benchmark` and `precision` in `trainer/`. Float32 matmul precision is torch's own default (`highest`) — the contract does not set it, so if the source ran TF32, call `torch.set_float32_matmul_precision` in `model.py` and give it a ledger row |
 | generation / inference | `Model.predict_step`, `infer_step`, or `predict.py` depending on profile |
 | size presets | `model/default.yaml` + `DEFAULT_*` in `model.py` |
 | logged metrics | the metrics dict returned from `compute_loss` |

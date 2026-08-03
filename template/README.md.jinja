@@ -114,6 +114,28 @@ A logger group member is a mapping of *name → logger config*: `build_trainer` 
 `_target_` child of `cfg.logger`, so one file can enable several loggers at once, and a file with a bare
 top-level `_target_` enables none of them without failing.
 
+### Reproducibility
+
+`pretrain` and `supervised_train` seed with `seed_everything(seed, workers=True)` (`seed: 0`; `null` skips
+seeding entirely), `num_workers` defaults to `0`, and the Trainer ships `deterministic: warn` and
+`benchmark: false`. What that buys is worth stating exactly, because it is less than "reproducible":
+
+> **same seed + same config + same environment → same metric.**
+
+Changing `num_workers` or `batch_size` alters RNG consumption order and legitimately changes results, and
+reproducibility across different hardware or library versions is not reachable at all.
+
+```bash
+meds-model supervised_train trainer.deterministic=true   # raise instead of warn on a non-deterministic op
+meds-model supervised_train trainer.precision=bf16-mixed # trade precision for speed
+```
+
+`CUBLAS_WORKSPACE_CONFIG=:4096:8` is set for you — without it `deterministic=true` raises on CUDA at the
+first matmul rather than at startup. Float32 matmul precision is left at torch's default (`highest`); this
+repository does not quietly run fp32 matmuls in bfloat16 to buy speed. If you need that, `precision` above
+is the better lever, and a model port that requires TF32 specifically should set it in `model.py` and
+record it.
+
 ### Two rules worth knowing
 
 **Sources are alternatives, not layers.** `supervised_train` and `predict` each accept several optional

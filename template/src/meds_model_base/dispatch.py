@@ -167,11 +167,18 @@ def _run_with_hydra(command: MEDSModelCommand, config_dir: str) -> None:
     paths (``meds-model commands`` / top-level ``--help``) stay cheap.
 
     The command is invoked via ``__call__``, not ``run``, so argument arbitration cannot be skipped.
+
+    ``configure_cublas_workspace`` runs first, and this is the reason it lives here rather than in
+    ``train.py``: it must precede any CUDA work, and every command reaches torch through this function.
+    It sets an environment variable and imports nothing, so the torch-free introspection paths are
+    unaffected — they never get here.
     """
     import hydra
 
     from .lightning import register_structured_configs
+    from .utils import configure_cublas_workspace
 
+    configure_cublas_workspace()
     register_structured_configs()
     hydra.main(version_base="1.3", config_path=config_dir, config_name=command.config_name)(command)()
 
