@@ -73,6 +73,9 @@ Config paths below are relative to `src/{{ model_slug }}/configs/`.
 | source element | where it goes in this repository |
 |---|---|
 | preprocessing / tokenisation pipeline | `preprocess_data.yaml` → `pipeline:` (a MEDS-transforms YAML), or a documented pre-pass |
+{% if data_backend == 'custom_featurization' %}| named clinical variables / feature list | `predicates.yaml` — one predicate per source variable, bound to the target dataset's codes; each becomes a `predicate//<name>` column |
+| feature construction (grids, aggregation, imputation, value use) | `src/{{ model_slug }}/datamodule.py` — over the featurized artifact, against `meds_model_base/lightning/protocol.py` |
+{% endif %}| model architecture | `src/{{ model_slug }}/model.py` — wrap the source package as a dependency, do not vendor a copy |
 | model architecture | `src/{{ model_slug }}/model.py` — wrap the source package as a dependency, do not vendor a copy |
 | pretraining objective | `Model.compute_loss` when `not batch.has_labels` — delegate to the source's own loss where possible |
 | task objective | `Model.compute_loss` when `batch.has_labels` |

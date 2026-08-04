@@ -117,7 +117,7 @@ class DefaultInferCommand(InferCommand):
         if not frames:
             raise RuntimeError(
                 "The datamodule produced no rows for any requested split. Check that external_labels_dir "
-                "and the tensorized cohort refer to the same subjects."
+                "and the patients artifact refer to the same subjects."
             )
         return pl.concat(frames, how="vertical_relaxed").unique(subset=KEYS, maintain_order=True)
 

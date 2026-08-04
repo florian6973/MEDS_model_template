@@ -22,6 +22,7 @@ from pathlib import Path
 
 import polars as pl
 
+from .manifest import read_manifest
 from .schemas import LabelSchema
 
 logger = logging.getLogger(__name__)
@@ -144,6 +145,50 @@ def tokenized_cohort(patients_dir: Path | str) -> dict[str, set[int]]:
     return cohort
 
 
+def featurized_cohort(patients_dir: Path | str) -> dict[str, set[int]]:
+    """Subjects present in a featurized (MEDS-layout) patients artifact, keyed by split.
+
+    Read from ``data/<split>/*.parquet`` — in a featurized artifact the shard layout is the only record
+    of split membership, exactly as ``tokenization/schemas/`` is for a tensorized one (the artifact
+    deliberately carries no ``subject_splits.parquet``; see ``preprocess_data``). A shard with no leading
+    split component belongs to no split and is skipped rather than guessed at.
+    """
+    data_dir = Path(patients_dir) / "data"
+    if not data_dir.is_dir():
+        raise TaskMaterializationError(
+            f"No data/ shards under {patients_dir}; it is not a featurized patients artifact."
+        )
+    cohort: dict[str, set[int]] = {}
+    for fp in sorted(data_dir.rglob("*.parquet")):
+        shard = fp.relative_to(data_dir)
+        if len(shard.parts) < 2:
+            continue
+        subjects = pl.read_parquet(fp, columns=["subject_id"])["subject_id"].to_list()
+        cohort.setdefault(shard.parts[0], set()).update(subjects)
+    return cohort
+
+
+def cohort_subjects(patients_dir: Path | str) -> dict[str, set[int]]:
+    """Split membership of a patients artifact, dispatched on its manifest's ``representation``.
+
+    The manifest is the authority on how the artifact stores split membership: ``mtd`` artifacts carry it
+    in ``tokenization/schemas/`` (read by :func:`tokenized_cohort`), ``predicates`` artifacts in the
+    ``data/<split>/`` shard layout (read by :func:`featurized_cohort`). A manifest without the field
+    predates the field and can only be an MTD artifact, so it is treated as one.
+    """
+    representation = read_manifest(patients_dir).get("representation", "mtd")
+    match representation:
+        case "mtd":
+            return tokenized_cohort(patients_dir)
+        case "predicates":
+            return featurized_cohort(patients_dir)
+        case other:
+            raise TaskMaterializationError(
+                f"{patients_dir} declares representation {other!r}, which this version does not know how "
+                "to read splits from. Known representations: mtd, predicates."
+            )
+
+
 def split_labels(labels: pl.DataFrame, cohort: dict[str, set[int]]) -> dict[str, pl.DataFrame]:
     """Partition labels by the split each subject was actually tokenized into.
 
@@ -173,13 +218,13 @@ def split_labels(labels: pl.DataFrame, cohort: dict[str, set[int]]) -> dict[str,
 
     if not out:
         raise TaskMaterializationError(
-            "No label row matched any subject in the tensorized cohort. Either these labels are for a "
+            "No label row matched any subject in the patients cohort. Either these labels are for a "
             "different dataset, or the preprocess_data pipeline filtered the whole cohort away."
         )
     if kept < labels.height:
         dropped = labels.filter(~pl.col("subject_id").is_in(sorted(set().union(*cohort.values()))))
         logger.warning(
-            "Dropping %d label row(s) for %d subject(s) absent from the tensorized cohort: either "
+            "Dropping %d label row(s) for %d subject(s) absent from the patients cohort: either "
             "filtered out by the preprocess_data pipeline (its manifest records how many), or not part "
             "of this dataset.",
             labels.height - kept,
@@ -211,7 +256,7 @@ def materialize_labels(
     dest = Path(dest)
     dest.mkdir(parents=True, exist_ok=True)
 
-    by_split = split_labels(read_labels(external_labels_dir), tokenized_cohort(patients_dir))
+    by_split = split_labels(read_labels(external_labels_dir), cohort_subjects(patients_dir))
 
     for split, df in by_split.items():
         if not include_labels:

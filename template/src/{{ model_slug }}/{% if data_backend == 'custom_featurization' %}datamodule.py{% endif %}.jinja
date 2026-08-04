@@ -1,0 +1,80 @@
+"""Your datamodule over the featurized patients artifact. THE STUB IS DELIBERATE — implement it here.
+
+``preprocess_data`` (with ``featurization=predicates``) publishes ``<data_dir>/patients`` as MEDS
+parquet augmented with one 0/1 ``predicate//<name>`` column per predicate, plus ``features.json``
+defining the feature space and its order. How those event-level columns become model inputs —
+aggregation, windowing, imputation, whether to read ``numeric_value`` on active rows — is modeling, so
+it lives here, not in the template.
+
+The commands interact with this class only through the surface documented in
+``meds_model_base/lightning/protocol.py``. In short, you must provide:
+
+- ``config.task_labels_dir`` (set at runtime by the commands): read ``{split}.parquet`` label files
+  from it — one sample per ``(subject_id, prediction_time)``, using events at or before that time.
+  ``boolean_value`` may be absent (inference); the timepoints must still yield samples.
+- ``config.vocab_size``: already implemented below from ``features.json``.
+- ``train_dataset``/``val_dataset``/``test_dataset`` (+ the matching ``*_dataloader`` methods),
+  for the train / tuning / held_out splits respectively.
+- each dataset's ``schema_df``: a polars frame of ``subject_id``, ``prediction_time`` in loader
+  iteration order (prediction loaders must not shuffle) — this is how ``predict`` aligns model outputs
+  to timepoints.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+import lightning.pytorch as pl
+from meds_model_base.featurize import load_features
+
+
+@dataclass
+class FeaturizedDataModuleConfig:
+    """What the shipped datamodule configs instantiate; extend freely (it is yours)."""
+
+    patients_dir: str
+    task_labels_dir: str | None = None
+
+    @property
+    def vocab_size(self) -> int:
+        """Feature-space size, from the artifact's ``features.json`` — never from parquet column order."""
+        return len(load_features(self.patients_dir))
+
+
+class FeaturizedDataModule(pl.LightningDataModule):
+    """A deliberate stub: every hook raises until you implement it. See the module docstring."""
+
+    is_stub = True
+
+    def __init__(self, config: FeaturizedDataModuleConfig, batch_size: int, num_workers: int = 0):
+        super().__init__()
+        self.config = config
+        self.batch_size = batch_size
+        self.num_workers = num_workers
+
+    def _unimplemented(self, what: str):
+        raise NotImplementedError(
+            f"{type(self).__name__}.{what} is the generated stub. Implement your datamodule in "
+            f"src/{{ model_slug }}/datamodule.py (see the module docstring for the contract)."
+        )
+
+    @property
+    def train_dataset(self):
+        self._unimplemented("train_dataset")
+
+    @property
+    def val_dataset(self):
+        self._unimplemented("val_dataset")
+
+    @property
+    def test_dataset(self):
+        self._unimplemented("test_dataset")
+
+    def train_dataloader(self):
+        self._unimplemented("train_dataloader")
+
+    def val_dataloader(self):
+        self._unimplemented("val_dataloader")
+
+    def test_dataloader(self):
+        self._unimplemented("test_dataloader")

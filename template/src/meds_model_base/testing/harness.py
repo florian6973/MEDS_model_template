@@ -49,12 +49,15 @@ def supported_sources(commands: Mapping[CommandName, type[MEDSModelCommand]], na
     return cls.supported_sources if cls.supported_sources is not None else frozenset(cls.sources)
 
 
-def build_workspace(meds_root: Path, workspace: Path) -> Path:
+def build_workspace(meds_root: Path, workspace: Path, extra_args: list[str] | None = None) -> Path:
     """Run ``preprocess_data``; return the shared ``data_dir``.
 
     No model is involved, so this half of the contract is exercisable from the moment a repository is
     generated — before its ``model.py`` stub is implemented. Labels are not preprocessed: each command
     materializes them from ``external_labels_dir`` itself.
+
+    ``extra_args`` are appended verbatim — how a fixture selects the predicates backend
+    (``featurization=predicates external_predicates_file=...``) without this harness knowing about it.
     """
     run_cli(
         [
@@ -62,6 +65,7 @@ def build_workspace(meds_root: Path, workspace: Path) -> Path:
             f"external_meds_dir={meds_root}",
             f"output_data_dir={workspace}",
             "do_overwrite=true",
+            *(extra_args or []),
         ]
     )
     return workspace

@@ -20,6 +20,14 @@
 ## extra key here raises TypeError and takes down the whole `meds-dev-*` CLI, not just this model.
 ## In particular `requirements.txt` must NOT be declared: the loader discovers it from the model
 ## directory on disk.
+{% set preprocess_extra = ' external_predicates_file={predicates_path}' if data_backend == 'custom_featurization' else '' -%}
+{% if data_backend == 'custom_featurization' -%}
+##
+## This model featurizes via predicates, so `{predicates_path}` is REQUIRED: pass
+## `predicates_path=<file>` to `meds-dev-model` (MEDS-DEV >= PR#325; the model's own predicates.yaml —
+## shipped into this model's MEDS-DEV directory by `meds-model-add-to-meds-dev` — is the reference).
+## Without it, command formatting fails with a KeyError naming predicates_path.
+{% endif -%}
 metadata:
   description: "{{ model_description }}"
   contacts:
@@ -29,13 +37,13 @@ metadata:
 commands:
 {% if profile == 'supervised' %}  supervised:
     train: |-
-      meds-model preprocess_data external_meds_dir={dataset_dir} output_data_dir={output_dir}/data do_overwrite=true
+      meds-model preprocess_data external_meds_dir={dataset_dir} output_data_dir={output_dir}/data{{ preprocess_extra }} do_overwrite=true
       meds-model supervised_train input_data_dir={output_dir}/data external_labels_dir={labels_dir} output_supervised_model_dir={output_dir}/model
     predict: |-
       meds-model predict input_supervised_model_dir={model_initialization_dir}/model external_labels_dir={labels_dir} splits=[{split}] output_predictions_dir={output_dir} do_overwrite=true
 {% elif profile == 'finetune' %}  unsupervised:
     train: |-
-      meds-model preprocess_data external_meds_dir={dataset_dir} output_data_dir={output_dir}/data do_overwrite=true
+      meds-model preprocess_data external_meds_dir={dataset_dir} output_data_dir={output_dir}/data{{ preprocess_extra }} do_overwrite=true
       meds-model pretrain input_data_dir={output_dir}/data output_pretrained_model_dir={output_dir}/pretrained
   supervised:
     train: |-
@@ -44,7 +52,7 @@ commands:
       meds-model predict input_supervised_model_dir={model_initialization_dir}/model external_labels_dir={labels_dir} splits=[{split}] output_predictions_dir={output_dir} do_overwrite=true
 {% elif profile == 'probe' %}  unsupervised:
     train: |-
-      meds-model preprocess_data external_meds_dir={dataset_dir} output_data_dir={output_dir}/data do_overwrite=true
+      meds-model preprocess_data external_meds_dir={dataset_dir} output_data_dir={output_dir}/data{{ preprocess_extra }} do_overwrite=true
       meds-model pretrain input_data_dir={output_dir}/data output_pretrained_model_dir={output_dir}/pretrained
   supervised:
     train: |-
@@ -54,7 +62,7 @@ commands:
       meds-model predict input_supervised_model_dir={model_initialization_dir}/model external_labels_dir={labels_dir} splits=[{split}] output_predictions_dir={output_dir} do_overwrite=true
 {% elif profile == 'zero_shot_materialized' %}  unsupervised:
     train: |-
-      meds-model preprocess_data external_meds_dir={dataset_dir} output_data_dir={output_dir}/data do_overwrite=true
+      meds-model preprocess_data external_meds_dir={dataset_dir} output_data_dir={output_dir}/data{{ preprocess_extra }} do_overwrite=true
       meds-model pretrain input_data_dir={output_dir}/data output_pretrained_model_dir={output_dir}/pretrained
   supervised:
     train: null
@@ -65,11 +73,11 @@ commands:
   supervised:
     train: null
     predict: |-
-      meds-model preprocess_data external_meds_dir={dataset_dir} output_data_dir={output_dir}/data do_overwrite=true
+      meds-model preprocess_data external_meds_dir={dataset_dir} output_data_dir={output_dir}/data{{ preprocess_extra }} do_overwrite=true
       meds-model predict input_data_dir={output_dir}/data external_labels_dir={labels_dir} splits=[{split}] output_predictions_dir={output_dir} do_overwrite=true
 {% else %}  unsupervised:
     train: |-
-      meds-model preprocess_data external_meds_dir={dataset_dir} output_data_dir={output_dir}/data do_overwrite=true
+      meds-model preprocess_data external_meds_dir={dataset_dir} output_data_dir={output_dir}/data{{ preprocess_extra }} do_overwrite=true
       meds-model pretrain input_data_dir={output_dir}/data output_pretrained_model_dir={output_dir}/pretrained
   supervised:
     train: null

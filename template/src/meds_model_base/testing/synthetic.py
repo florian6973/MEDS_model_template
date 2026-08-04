@@ -82,10 +82,12 @@ def build_signal_dataset(
     signal_rate: float = 0.5,
     seed: int = 0,
     shuffle_labels: bool = False,
+    signal_code: str = SIGNAL_CODE,
+    background: list[str] | None = None,
 ) -> Path:
-    """Write a classifier-signal MEDS dataset: the presence of :data:`SIGNAL_CODE` determines the label.
+    """Write a classifier-signal MEDS dataset: the presence of ``signal_code`` determines the label.
 
-    Each subject gets a short run of background codes; with probability ``signal_rate`` the ``SIGNAL_CODE``
+    Each subject gets a short run of background codes; with probability ``signal_rate`` the ``signal_code``
     is inserted. The boolean label is exactly whether the subject has the signal (so a model that reads the
     sequence can reach AUROC ≈ 1.0). ``shuffle_labels=True`` breaks the signal↔label link (negative
     control: nothing to learn, AUROC ≈ 0.5).
@@ -93,11 +95,16 @@ def build_signal_dataset(
     **Only the signal code is informative.** Sequence length and the signal's position within the sequence
     are both label-independent by construction; see the comment in the loop for why that matters.
 
+    ``signal_code`` / ``background`` default to this module's fixed vocabulary; a featurized repo passes
+    codes drawn from its own predicates file instead (:func:`signal_dataset_from_predicates`), so the
+    model is tested on its *production* feature space.
+
     Returns ``root`` (a MEDS dataset with a ``signal_task`` task-labels directory).
     """
     rng = random.Random(seed)
+    background = list(background) if background else list(_BACKGROUND)
     counts = {train_split: n_train, tuning_split: n_tuning, held_out_split: n_held_out}
-    codes = [*_BACKGROUND, SIGNAL_CODE]
+    codes = [*background, signal_code]
 
     per_split: dict[str, list[dict]] = {}
     task_labels: dict[str, pl.DataFrame] = {}
@@ -114,13 +121,13 @@ def build_signal_dataset(
             # over: the code would always sit at position 0, a positive subject would always have exactly
             # one more event than a negative one — a length-only predictor measured AUROC 0.59 — and since
             # prediction_time is derived from the event count, it would differ by class too. A model could
-            # then score well here without ever reading SIGNAL_CODE, which is the one thing this dataset
-            # exists to check.
-            events = [rng.choice(_BACKGROUND) for _ in range(rng.randint(4, 9))]
+            # then score well here without ever reading the signal code, which is the one thing this
+            # dataset exists to check.
+            events = [rng.choice(background) for _ in range(rng.randint(4, 9))]
             if has_signal:
-                events.insert(rng.randrange(len(events) + 1), SIGNAL_CODE)
+                events.insert(rng.randrange(len(events) + 1), signal_code)
             else:
-                events.append(rng.choice(_BACKGROUND))
+                events.append(rng.choice(background))
             for i, code in enumerate(events):
                 rows.append(
                     {
@@ -147,6 +154,49 @@ def build_signal_dataset(
         task_labels[split] = label_df
 
     return _write_meds(root, per_split, codes, task_labels)
+
+
+def signal_dataset_from_predicates(
+    root: Path,
+    predicates_file: Path | str,
+    *,
+    seed: int = 0,
+    shuffle_labels: bool = False,
+) -> Path:
+    """A signal dataset whose codes come from **the model's own predicates file** (the one-file principle).
+
+    The dependency inverts: instead of a predicates fixture matched to a fixed synthetic vocabulary, the
+    dataset adapts to the predicates. The predicates with literal codes (exact / any-of — a regex cannot
+    be reverse-instantiated into a code) are collected; the first becomes the signal predicate (its first
+    code planted with the label), the rest are distractors (their codes emitted label-independently). The
+    feature space the model is then tested on is its production one: same names, same order, same
+    ``features.json``.
+
+    Distractors are why at least **two** literal-code predicates are required: with a single feature the
+    column trivially equals the answer and the test stops checking that the model weights the right
+    feature. Callers should ``pytest.skip`` on the ValueError this raises.
+
+    Raises:
+        ValueError: if fewer than two predicates with literal codes remain after parsing.
+    """
+    import yaml
+
+    from ..featurize import literal_code_predicates, parse_predicates
+
+    raw = yaml.safe_load(Path(predicates_file).read_text())["predicates"]
+    literal = literal_code_predicates(parse_predicates(raw), raw)
+    if len(literal) < 2:
+        raise ValueError(
+            f"The designed-signal test needs at least two predicates with literal codes (exact or "
+            f"any-of) in {predicates_file}; found {len(literal)} ({', '.join(literal) or 'none'}). "
+            "Add one, or provide example codes for your regex predicates."
+        )
+    names = list(literal)
+    signal_code = literal[names[0]][0]
+    background = sorted({c for name in names[1:] for c in literal[name]} - {signal_code})
+    return build_signal_dataset(
+        root, seed=seed, shuffle_labels=shuffle_labels, signal_code=signal_code, background=background
+    )
 
 
 def build_pattern_dataset(

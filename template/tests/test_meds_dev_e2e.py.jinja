@@ -183,6 +183,23 @@ def test_meds_dev_runs_this_model_end_to_end(meds_dev, meds_root, labels_dir, tm
         f"package, so this means the model directory did not land there. Registered: {listed.stdout!r}"
     )
 
+{% if data_backend == 'custom_featurization' %}    # This model's commands reference {predicates_path}, which needs MEDS-DEV's passthrough (PR#325).
+    # Over the demo vocabulary the model's predicates may match nothing — that is fine: this test
+    # asserts plumbing (venv, placeholder fill, chain, schema, coverage), not learnability.
+    run_model_cfg = meds_dev / "src" / "MEDS_DEV" / "configs" / "_run_model.yaml"
+    if "predicates_path" not in run_model_cfg.read_text():
+        pytest.skip(
+            "this MEDS-DEV checkout has no predicates_path passthrough (MEDS-DEV PR#325); point "
+            "MEDS_DEV_DIR at a checkout that includes it"
+        )
+    shipped_predicates = meds_dev / "src" / "MEDS_DEV" / "models" / MODEL_NAME / "predicates.yaml"
+    assert shipped_predicates.is_file(), (
+        "meds-model-add-to-meds-dev did not ship predicates.yaml alongside model.yaml; a benchmark "
+        "user would have no reference file to pass as predicates_path"
+    )
+    predicates_args = [f"predicates_path={shipped_predicates}"]
+{% else %}    predicates_args: list[str] = []
+{% endif %}
     out = tmp_path / "run"
     _run(
         [
@@ -196,6 +213,7 @@ def test_meds_dev_runs_this_model_end_to_end(meds_dev, meds_root, labels_dir, tm
             "mode=full",
             "dataset_type=full",
             "do_overwrite=true",
+            *predicates_args,
         ],
         timeout=RUN_TIMEOUT,
     )

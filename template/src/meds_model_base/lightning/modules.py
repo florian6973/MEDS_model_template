@@ -22,14 +22,23 @@ from typing import TYPE_CHECKING, ClassVar
 
 import lightning.pytorch as L
 import torch
-from meds_torchdata import MEDSTorchBatch
 from torch import Tensor, nn
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from torch.optim import Optimizer
     from torch.optim.lr_scheduler import LRScheduler
 
-PAD_INDEX = MEDSTorchBatch.PAD_INDEX
+try:
+    from meds_torchdata import MEDSTorchBatch
+
+    PAD_INDEX = MEDSTorchBatch.PAD_INDEX
+except ImportError:
+    # meds-torch-data is optional (a data_backend=custom_featurization repo does not install it). This
+    # module must still *import* — the generated model stub subclasses BaseLightningModule — but the
+    # MTD-batch helpers (padding_mask, CodeEmbedder) are then unusable, which is correct: there is no
+    # MEDSTorchBatch to hand them. PAD_INDEX keeps MTD's value; annotations are strings (PEP 563).
+    MEDSTorchBatch = None
+    PAD_INDEX = 0
 
 
 def padding_mask(batch: MEDSTorchBatch) -> Tensor:

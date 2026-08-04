@@ -44,6 +44,8 @@ MODELS_SUBPATH = Path("src/MEDS_DEV/models")
 SPEC_FILE = "model.yaml"
 REQUIREMENTS_FILE = "requirements.txt"
 README_FILE = "README.md"
+#: Shipped alongside when the spec references {predicates_path}: the reference featurization bindings.
+PREDICATES_FILE = "predicates.yaml"
 
 _PROBE = (
     "import importlib.util as u; s = u.find_spec('MEDS_DEV'); "
@@ -325,6 +327,11 @@ def main(argv: list[str] | None = None) -> int:
     payload = {SPEC_FILE: spec_text, REQUIREMENTS_FILE: requirements}
     if args.force or not (dest / README_FILE).is_file():
         payload[README_FILE] = readme_stub(name, spec_description(spec_text), source)
+    # A model whose commands reference {predicates_path} needs a reference predicates file benchmark
+    # users can pass; shipping the repo's own predicates.yaml alongside model.yaml is what makes
+    # `meds-dev-model ... predicates_path=<meds-dev>/models/<name>/predicates.yaml` possible.
+    if (repo / PREDICATES_FILE).is_file() and "{predicates_path}" in spec_text:
+        payload[PREDICATES_FILE] = (repo / PREDICATES_FILE).read_text()
 
     if args.dry_run:
         print(f"\nwould write {len(payload)} files under {dest}:")

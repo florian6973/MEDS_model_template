@@ -71,10 +71,14 @@ cd /tmp/demo && uv venv \
   && uv run pytest -m "not slow" -q -rs
 ```
 
-Expect ~37 passed and 2 skipped, and both skips are the correct result — everything that does not need a
-model runs, including real MTD tensorization and task materialization. One skip is `skip_if_stub`; the
-other is `test_unsupported_command_fails_clearly`, whose parameter set is empty for `probe` because that
-DAG registers all five commands.
+Expect ~75 passed and 1–3 skipped (supervised; `probe` also skips `test_unsupported_command_fails_clearly`,
+whose parameter set is empty because that DAG registers all five commands), and every skip is the correct
+result — everything that does not need a model runs, including real MTD tensorization, a real predicates
+featurization (both workspaces are built, and the equivalence guard compares their label partitioning),
+and task materialization. One skip is `skip_if_stub`; with `'data_backend': 'custom_featurization'` in
+the `data` dict the repo installs **without meds-torch-data**, the two MTD-only tests skip via
+`importorskip`, and the CLI smoke test doubles as the regression test for the import guard in
+`lightning/__init__.py`.
 
 Add `'use_wandb': True, 'use_mlflow': True` to that `data` dict to render the optional logger configs —
 otherwise `logger=csv` is the only thing the generated suite ever composes.
@@ -223,6 +227,16 @@ class exists that no profile registers — which is how `MaterializedPredictComm
 
 `commands.py.jinja` builds an `entries` list in Jinja and derives its import block from it, so a profile
 can never import a class it does not register (an F401 in the generated repo).
+
+`data_backend` is a second, orthogonal copier axis (`mtd` | `custom_featurization`) — a representation
+choice, not a DAG choice. **[`docs/design-featurization.md`](docs/design-featurization.md) is its spec.**
+It gates only dependencies (meds-torch-data), rendered configs (`datamodule/*.yaml`,
+`preprocess_data.yaml`'s `featurization` default), stubs (`datamodule.py`) and the `model.yaml`
+predicates wiring; `src/meds_model_base/` ships both representations unconditionally and tolerates
+either dependency set (import guards in `lightning/__init__.py` and `lightning/modules.py` — do not
+"clean up" those try/excepts; a custom_featurization repo has no meds_torchdata to import). The model's
+`predicates.yaml` is user-owned and is the ONE predicates file: generated tests, MEDS-DEV runs and
+production all read it.
 
 `_templates_suffix: .jinja` means **only** `.jinja` files are rendered; everything else under `template/`
 is copied byte-for-byte (path segments like `{{ model_slug }}` are still substituted). A file whose

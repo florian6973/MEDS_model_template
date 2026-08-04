@@ -11,7 +11,35 @@ a supervised model, a fine-tune, a probe and a zero-shot model alike.
 Deselected in the fast CI job (`-m "not slow"`); run it before you claim the model works.
 """
 
+{% if data_backend == 'custom_featurization' %}from pathlib import Path
+
 import polars as pl
+import pytest
+from meds_model_base.testing import (
+    assert_learns_signal,
+    binary_auroc,
+    build_workspace,
+    signal_dataset_from_predicates,
+    skip_if_stub,
+)
+
+from {{ model_slug }}.model import Model
+
+pytestmark = pytest.mark.slow
+
+#: The model's own predicates file (the one-file principle): the signal dataset is generated FROM it,
+#: so the model is tested on its production feature space — same names, same order, same features.json.
+PREDICATES_FILE = Path(__file__).resolve().parent.parent / "predicates.yaml"
+
+_WORKSPACE_ARGS = ["featurization=predicates", f"external_predicates_file={PREDICATES_FILE}"]
+
+
+def _signal_dataset(root, *, seed: int, shuffle_labels: bool):
+    try:
+        return signal_dataset_from_predicates(root, PREDICATES_FILE, seed=seed, shuffle_labels=shuffle_labels)
+    except ValueError as e:  # fewer than two literal-code predicates — a curation gap, not a model bug
+        pytest.skip(str(e))
+{% else %}import polars as pl
 import pytest
 from meds_model_base.testing import (
     assert_learns_signal,
@@ -25,12 +53,18 @@ from {{ model_slug }}.model import Model
 
 pytestmark = pytest.mark.slow
 
+_WORKSPACE_ARGS: list[str] = []
+
+
+def _signal_dataset(root, *, seed: int, shuffle_labels: bool):
+    return build_signal_dataset(root, seed=seed, shuffle_labels=shuffle_labels)
+{% endif %}
 
 def _predictions_for(chain, tmp_path, name: str, *, shuffle_labels: bool, seed: int):
     """Build a synthetic dataset, run the DAG over it, and return (predictions, held-out labels)."""
-    raw = build_signal_dataset(tmp_path / f"raw_{name}", seed=seed, shuffle_labels=shuffle_labels)
+    raw = _signal_dataset(tmp_path / f"raw_{name}", seed=seed, shuffle_labels=shuffle_labels)
     labels_dir = raw / "task_labels" / "signal_task"
-    data_dir = build_workspace(raw, tmp_path / f"data_{name}")
+    data_dir = build_workspace(raw, tmp_path / f"data_{name}", extra_args=_WORKSPACE_ARGS)
     artifacts = chain(data_dir, labels_dir, tmp_path / f"out_{name}", epochs=25, batch_size=16)
     assert "predictions" in artifacts, "this DAG does not register `predict`, so it cannot be evaluated"
     return (

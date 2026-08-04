@@ -6,6 +6,8 @@ signal and asserts the model learns it, always paired with a negative control so
 vacuously.
 
 - :func:`build_signal_dataset` — a classifier signal: a marker code deterministically predicts the label.
+- :func:`signal_dataset_from_predicates` — the same, with codes drawn from the model's own predicates
+  file, so a featurized model is tested on its production feature space.
 - :func:`build_pattern_dataset` — a generative signal: a fixed repeating code pattern.
 - :func:`binary_auroc`, :func:`assert_learns_signal` — learnability assertions (+ negative control).
 - :func:`skip_if_stub` — skip a conformance test while ``model.py`` is still the generated stub.
@@ -15,7 +17,12 @@ vacuously.
 from .harness import build_workspace, run_chain, run_cli, supported_sources
 from .property import assert_learns_signal, binary_auroc
 from .stub import is_stub, skip_if_stub
-from .synthetic import SIGNAL_CODE, build_pattern_dataset, build_signal_dataset
+from .synthetic import (
+    SIGNAL_CODE,
+    build_pattern_dataset,
+    build_signal_dataset,
+    signal_dataset_from_predicates,
+)
 
 __all__ = [
     "SIGNAL_CODE",
@@ -29,4 +36,5 @@ __all__ = [
     "skip_if_stub",
     "build_pattern_dataset",
     "build_signal_dataset",
+    "signal_dataset_from_predicates",
 ]

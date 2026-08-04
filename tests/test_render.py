@@ -87,11 +87,12 @@ def _registry(dst: Path, slug: str) -> dict[str, str]:
     return dict(re.findall(r"CommandName\.(\w+): (\w+),", text))
 
 
+@pytest.mark.parametrize("data_backend", ["mtd", "custom_featurization"])
 @pytest.mark.parametrize("profile,commands", sorted(PROFILE_COMMANDS.items()))
 @pytest.mark.render
-def test_render_profile(tmp_path, profile, commands):
+def test_render_profile(tmp_path, profile, commands, data_backend):
     dst = tmp_path / profile
-    slug = _render(dst, profile)
+    slug = _render(dst, profile, data_backend=data_backend)
 
     for rel in [
         "pyproject.toml",
@@ -103,6 +104,8 @@ def test_render_profile(tmp_path, profile, commands):
         "docs/PORTING-A-MODEL.md",
         "model.yaml",
         ".copier-answers.yml",
+        # The model's one predicates file: rendered on BOTH backends (MTD repos featurize in tests too).
+        "predicates.yaml",
         f"src/{slug}/__main__.py",
         f"src/{slug}/model.py",
         f"src/{slug}/commands.py",
@@ -519,6 +522,45 @@ def test_optional_loggers_render_with_their_extra(tmp_path, enabled):
 
     # Both answers also gate a branch in README.md.jinja, and the per-profile newline test above only ever
     # renders the default (disabled) one.
+    assert not _bad_eof(dst), f"files not ending in exactly one newline: {_bad_eof(dst)}"
+
+
+@pytest.mark.parametrize("data_backend", ["mtd", "custom_featurization"])
+@pytest.mark.render
+def test_data_backend_gates_dependencies_configs_and_stubs(tmp_path, data_backend):
+    """``data_backend`` is implemented the ``use_wandb`` way: it gates the meds-torch-data dependency,
+    which datamodule configs render, the datamodule stub, the preprocess default and the model.yaml
+    predicates wiring — while ``src/meds_model_base/`` ships both paths unconditionally (Jinja-stripping
+    the vendored contract would double every merge and render matrix for zero runtime win)."""
+    custom = data_backend == "custom_featurization"
+    dst = tmp_path / data_backend
+    slug = _render(dst, "supervised", data_backend=data_backend)
+
+    pyproject = (dst / "pyproject.toml").read_text()
+    assert ("meds-torch-data" in pyproject) is not custom, "the MTD dependency must follow the backend"
+
+    task_cfg = (dst / f"src/{slug}/configs/datamodule/task.yaml").read_text()
+    patients_cfg = (dst / f"src/{slug}/configs/datamodule/patients.yaml").read_text()
+    for cfg in (task_cfg, patients_cfg):
+        assert ("meds_torchdata" in cfg) is not custom
+        assert (f"{slug}.datamodule" in cfg) is custom
+
+    assert (dst / f"src/{slug}/datamodule.py").exists() is custom, "the stub renders only when it is yours"
+
+    preprocess = (dst / f"src/{slug}/configs/preprocess_data.yaml").read_text()
+    expected_default = "featurization: predicates" if custom else "featurization: mtd"
+    assert expected_default in preprocess
+
+    model_yaml = (dst / "model.yaml").read_text()
+    assert ("{predicates_path}" in model_yaml) is custom, (
+        "a featurized model must bind the dataset predicates via MEDS-DEV's {predicates_path}; "
+        "an MTD model must not require an argument it does not use"
+    )
+
+    # Both backends ship the model's one predicates file and the vendored contract's featurizer: the
+    # featurization tests run in MTD repos too, and flipping the answer later needs no contract change.
+    assert (dst / "predicates.yaml").is_file()
+    assert (dst / "src/meds_model_base/featurize.py").is_file()
     assert not _bad_eof(dst), f"files not ending in exactly one newline: {_bad_eof(dst)}"
 
 

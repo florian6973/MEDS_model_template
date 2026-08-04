@@ -16,6 +16,13 @@ from meds_model_base.testing import build_workspace, run_chain, run_cli
 
 from {{ model_slug }}.commands import COMMANDS
 
+#: The model's own predicates file — the ONE predicates file (tests, MEDS-DEV runs and production all
+#: read the same declaration; there is deliberately no test-only fixture copy).
+PREDICATES_FILE = Path(__file__).resolve().parent.parent / "predicates.yaml"
+
+#: The overrides that select the predicates backend for a `preprocess_data` run.
+FEATURIZE_ARGS = ["featurization=predicates", f"external_predicates_file={PREDICATES_FILE}"]
+
 
 @pytest.fixture
 def cli():
@@ -48,8 +55,29 @@ def labels_dir(meds_root) -> Path:
     return tasks[0]
 
 
+{% if data_backend == 'custom_featurization' %}@pytest.fixture(scope="session")
+def data_dir(meds_root, tmp_path_factory) -> Path:
+    """A shared workspace with patients/ (predicates representation), built once for the session."""
+    workspace = tmp_path_factory.mktemp("workspace") / "data"
+    return build_workspace(meds_root, workspace, extra_args=FEATURIZE_ARGS)
+
+
 @pytest.fixture(scope="session")
+def featurized_data_dir(data_dir) -> Path:
+    """In this repo the default workspace already IS the featurized one."""
+    return data_dir
+{% else %}@pytest.fixture(scope="session")
 def data_dir(meds_root, tmp_path_factory) -> Path:
     """A shared workspace with patients/, built once for the session. Labels are not preprocessed."""
     workspace = tmp_path_factory.mktemp("workspace") / "data"
     return build_workspace(meds_root, workspace)
+
+
+@pytest.fixture(scope="session")
+def featurized_data_dir(meds_root, tmp_path_factory) -> Path:
+    """A predicates-representation workspace. Cheap and dependency-free, so it is built in MTD repos
+    too: the featurization contract tests run everywhere, and the equivalence guard can compare the two
+    representations' label partitioning in the same session."""
+    workspace = tmp_path_factory.mktemp("featurized_workspace") / "data"
+    return build_workspace(meds_root, workspace, extra_args=FEATURIZE_ARGS)
+{%- endif %}
