@@ -28,7 +28,15 @@ def register_structured_configs(group: str = "datamodule/config") -> None:
     global _STRUCTURED_CONFIGS_REGISTERED
     if _STRUCTURED_CONFIGS_REGISTERED:
         return
-    from meds_torchdata import MEDSTorchDataConfig
+    try:
+        from meds_torchdata import MEDSTorchDataConfig
+    except ImportError:
+        # meds-torch-data is optional: a repo generated with data_backend=custom_featurization does not
+        # install it. The config-store group registered here is referenced only by the MTD datamodule
+        # configs, which such a repo does not render — composing one anyway fails with Hydra's
+        # missing-group error, which names the config that needs the package.
+        _STRUCTURED_CONFIGS_REGISTERED = True
+        return
 
     MEDSTorchDataConfig.add_to_config_store(group)
     _STRUCTURED_CONFIGS_REGISTERED = True

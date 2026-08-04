@@ -22,9 +22,11 @@ _skip_if_exists:
   - "src/{{ model_slug }}/model.py"
   - "src/{{ model_slug }}/commands.py"
   - "src/{{ model_slug }}/predict.py"
+  - "src/{{ model_slug }}/datamodule.py"
   - "src/{{ model_slug }}/configs/model/**"
   - "src/{{ model_slug }}/configs/paths/**"
   - "src/{{ model_slug }}/configs/profile/**"
+  - "predicates.yaml"
 
 _exclude:
   - "*.pyc"
@@ -112,6 +114,18 @@ profile:
     "packaged — weights ship with the repo; predict only (PFN-style)": "packaged"
     "custom — choose each command yourself": "custom"
   default: "supervised"
+
+# The data backend decides how `preprocess_data` materializes patient data — a representation choice,
+# orthogonal to the profile (which is a DAG-shape choice). It gates only dependencies, configs and
+# stubs; `src/meds_model_base/` ships both paths unconditionally, so flipping the answer later and
+# running `copier update` backfills what the new backend needs.
+data_backend:
+  type: str
+  help: "How preprocess_data materializes patient data"
+  choices:
+    "mtd — MEDS-transforms + meds-torch-data tensorization (the standard sequence-model path)": "mtd"
+    "custom_featurization — 0/1 predicate columns on MEDS parquet; you write the datamodule": "custom_featurization"
+  default: "mtd"
 
 # Command toggles, only *asked* for the custom profile. `preprocess_data` is always supported: every
 # chain starts by materializing patient data. Tasks are not a stage — commands take external_labels_dir.

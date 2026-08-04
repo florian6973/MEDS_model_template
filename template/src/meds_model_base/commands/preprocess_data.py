@@ -1,8 +1,15 @@
 """``preprocess_data`` — external MEDS → this model's patient representation.
 
 Optionally runs a MEDS-transforms pipeline (``cfg.pipeline``, for model-specific enrichment such as
-time-derived tokens or value binning), then meds-torch-data's ``MTD_preprocess`` to normalize, tokenize and
-tensorize the dataset into the layout the training datamodule consumes.
+time-derived tokens or value binning), then one of two representations (``cfg.featurization``, recorded
+in the manifest as ``representation``):
+
+- ``mtd`` (default): meds-torch-data's ``MTD_preprocess`` normalizes, tokenizes and tensorizes the
+  dataset into the layout the MTD training datamodule consumes.
+- ``predicates``: presence featurization (:mod:`meds_model_base.featurize`) — the data keeps its MEDS
+  layout, augmented with one 0/1 ``predicate//<name>`` column per predicate in
+  ``cfg.external_predicates_file``, plus a ``features.json`` defining the feature space. Needs no
+  meds-torch-data; the model brings its own datamodule (see ``lightning/protocol.py``).
 
 Both stages are shelled out (they are Hydra applications with their own console scripts) and streamed live,
 so long runs show progress. The result is published atomically as ``<output_data_dir>/patients``: either the
@@ -51,6 +58,27 @@ class DefaultPreprocessDataCommand(PreprocessDataCommand):
         data_dir = Path(cfg.output_data_dir)
         patients_dir = data_dir / PATIENTS_SUBDIR
         pipeline = cfg.get("pipeline")
+        featurization = str(cfg.get("featurization") or "mtd")
+        if featurization not in ("mtd", "predicates"):
+            raise ValueError(f"featurization must be 'mtd' or 'predicates', got {featurization!r}.")
+
+        parsed = predicates_file = digest = None
+        if featurization == "predicates":
+            from ..featurize import predicates_digest, read_predicates_file
+
+            predicates_file = cfg.get("external_predicates_file")
+            if not predicates_file:
+                # An error, not a passthrough: silently publishing an artifact with zero feature
+                # columns would look exactly like a finished one.
+                raise ValueError(
+                    "featurization=predicates requires external_predicates_file. Pass the model's "
+                    "predicates file (e.g. external_predicates_file=predicates.yaml)."
+                )
+            # Parsed before any heavy work: a bad predicates file fails in seconds, not after a pipeline.
+            parsed = read_predicates_file(
+                predicates_file, strict=bool(cfg.get("featurization_strict", False))
+            )
+            digest = predicates_digest(predicates_file)
 
         # Before the artifact is staged and long before a pipeline runs: this is the one precondition
         # whose violation is otherwise reported by MTD, several minutes in and in its own vocabulary.
@@ -65,7 +93,7 @@ class DefaultPreprocessDataCommand(PreprocessDataCommand):
             config=cfg,
             do_overwrite=bool(cfg.get("do_overwrite", False)),
         ) as (staging, extras):
-            mtd_input = external_meds_dir
+            source_input = external_meds_dir
             if pipeline:
                 intermediate = staging.parent / f"{staging.name}.transforms"
                 self._run_meds_transforms(pipeline, external_meds_dir, intermediate, cfg)
@@ -73,14 +101,32 @@ class DefaultPreprocessDataCommand(PreprocessDataCommand):
                 # deliberately reshard. Checking anyway costs a directory listing and turns "MTD found no
                 # schema files" back into a statement about the pipeline that actually caused it.
                 _require_split_sharded(intermediate, "the pipeline output")
-                mtd_input = intermediate
-
-            self._run_mtd(mtd_input, staging)
-            _validate_tensorized(staging)
+                source_input = intermediate
 
             extras["source"] = {"external_meds_dir": str(external_meds_dir)}
-            extras["tensorization"] = {"pipeline": str(pipeline) if pipeline else None}
-            extras.update(_describe_cohort(external_meds_dir, staging))
+            if featurization == "predicates":
+                from ..featurize import featurize_dataset
+                from ..tasks import featurized_cohort
+
+                counts = featurize_dataset(source_input, staging, parsed)
+                _validate_featurized(staging, parsed)
+                extras["representation"] = "predicates"
+                extras["featurization"] = {
+                    "pipeline": str(pipeline) if pipeline else None,
+                    "predicates_file": str(predicates_file),
+                    "predicates_digest": digest,
+                    "n_features": len(parsed.order),
+                    "skipped": sorted(parsed.skipped),
+                    "match_counts": counts,
+                }
+                cohort = featurized_cohort(staging)
+            else:
+                self._run_mtd(source_input, staging)
+                _validate_tensorized(staging)
+                extras["representation"] = "mtd"
+                extras["tensorization"] = {"pipeline": str(pipeline) if pipeline else None}
+                cohort = None
+            extras.update(_describe_cohort(external_meds_dir, staging, cohort=cohort))
 
         logger.info("Patient data ready at %s.", patients_dir)
         return patients_dir
@@ -189,7 +235,37 @@ def _validate_tensorized(output_dir: Path) -> None:
         )
 
 
-def _describe_cohort(meds_dir: Path, tensorized: Path) -> dict:
+def _validate_featurized(output_dir: Path, parsed) -> None:
+    """The featurized twin of :func:`_validate_tensorized`: re-verify the artifact before publishing.
+
+    Every declared predicate column must be present in every shard, and ``features.json`` must agree
+    with what was parsed — cheap re-reads of what :func:`~meds_model_base.featurize.featurize_dataset`
+    just wrote, standing between a partial write and a published artifact.
+    """
+    import json
+
+    import polars as pl
+
+    from ..featurize import FEATURES_FILENAME
+
+    features_fp = output_dir / FEATURES_FILENAME
+    if not features_fp.is_file():
+        raise FileNotFoundError(f"Expected {features_fp}; featurization did not complete.")
+    declared = [f["column"] for f in json.loads(features_fp.read_text())["features"]]
+    if declared != parsed.columns:
+        raise RuntimeError(
+            f"{features_fp} disagrees with the parsed predicates: {declared} != {parsed.columns}."
+        )
+    shards = sorted((output_dir / "data").rglob("*.parquet"))
+    if not shards:
+        raise FileNotFoundError(f"No data shards under {output_dir}/data; featurization wrote nothing.")
+    for fp in shards:
+        missing = set(declared) - set(pl.scan_parquet(fp).collect_schema().names())
+        if missing:
+            raise RuntimeError(f"Shard {fp} is missing predicate column(s): {sorted(missing)}.")
+
+
+def _describe_cohort(meds_dir: Path, tensorized: Path, cohort: dict | None = None) -> dict:
     """Cohort statistics for the manifest, counted from the tensorized output.
 
     Counting the *artifact* rather than ``external_meds_dir`` is what makes a filtering ``pipeline``
@@ -206,7 +282,8 @@ def _describe_cohort(meds_dir: Path, tensorized: Path) -> dict:
     from ..tasks import tokenized_cohort
 
     described: dict = {}
-    cohort = tokenized_cohort(tensorized)
+    if cohort is None:
+        cohort = tokenized_cohort(tensorized)
     if cohort:
         described["splits"] = {split: len(subjects) for split, subjects in sorted(cohort.items())}
 

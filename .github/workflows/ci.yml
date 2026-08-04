@@ -34,19 +34,27 @@ jobs:
         # `logger=csv`. One extra entry turns both on: `test_every_rendered_logger_composes` is then the
         # job that would catch `logger=wandb` raising MissingConfigException again.
         loggers: [false]
+        data_backend: [mtd]
         include:
           - profile: supervised
             loggers: true
+            data_backend: mtd
+          # The custom-featurization lane: its venv deliberately omits meds-torch-data, so the lane
+          # itself proves nothing imports it (including `meds-model commands` — the import-guard test).
+          - profile: supervised
+            loggers: false
+            data_backend: custom_featurization
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
-      - name: Render the ${{ matrix.profile }} DAG (loggers=${{ matrix.loggers }})
+      - name: Render the ${{ matrix.profile }} DAG (loggers=${{ matrix.loggers }}, backend=${{ matrix.data_backend }})
         run: |
           uvx copier copy --vcs-ref=HEAD --defaults --trust \
             --data model_slug=demo_model --data model_name="Demo Model" \
             --data profile=${{ matrix.profile }} \
+            --data data_backend=${{ matrix.data_backend }} \
             --data use_wandb=${{ matrix.loggers }} --data use_mlflow=${{ matrix.loggers }} \
             . /tmp/demo_model
       - name: Install torch (CPU) + run the generated repo's tests

@@ -22,6 +22,26 @@ This DAG's chain:
 `README.md` documents the commands, their arguments and the artifact layout — read it for usage. This
 file covers what is easy to get wrong from the inside.
 
+## Data backend
+
+Generated with `data_backend={{ data_backend }}`.
+{% if data_backend == 'custom_featurization' %}
+`preprocess_data` runs presence featurization: 0/1 `predicate//<name>` columns stamped onto
+split-sharded MEDS parquet, plus `features.json` (the artifact's feature space — order matters, a
+trained checkpoint depends on it). The predicates come from `predicates.yaml` at the repo root — the
+model's own concept declaration; the tests, MEDS-DEV runs (`predicates_path=`) and production all read
+that ONE file, so edit it, don't fork it. **The datamodule over the featurized artifact is yours**:
+implement `src/{{ model_slug }}/datamodule.py` against the surface in
+`src/meds_model_base/lightning/protocol.py` (settable `config.task_labels_dir`, `config.vocab_size`,
+the split dataset/dataloader attributes, and `schema_df` in loader order). meds-torch-data is
+deliberately not installed here; the two tests that need it skip, honestly.
+{% else %}
+`preprocess_data` tensorizes via meds-torch-data and the shipped datamodule configs consume that
+artifact. The presence-featurization path (`featurization=predicates` + `predicates.yaml`) also ships
+and is exercised by the tests; a repo that should featurize instead can flip the answer and run
+`copier update`.
+{% endif %}
+
 ## Porting an existing model? Read the procedure first
 
 If the task is to reimplement a published model (a package, a paper repo) here, read
@@ -41,6 +61,8 @@ test fixture is the failure mode that document exists to prevent** — fix the f
 | Path | Owner | On `copier update` |
 |---|---|---|
 | `src/{{ model_slug }}/model.py` | you | never touched (`_skip_if_exists`) |
+{% if data_backend == 'custom_featurization' %}| `src/{{ model_slug }}/datamodule.py` | you | never touched |
+{% endif %}| `predicates.yaml` | you | never touched |
 {% if profile in ['zero_shot_direct', 'packaged'] %}| `src/{{ model_slug }}/predict.py` | you | never touched |
 {% endif %}| `src/{{ model_slug }}/commands.py` | you | never touched |
 | `src/{{ model_slug }}/configs/{model,paths,profile}/` | you | never touched |

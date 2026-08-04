@@ -14,7 +14,7 @@ import pytest
 import yaml
 from meds_evaluation.schema import PredictionSchema
 from meds_model_base.commands import CommandName
-from meds_model_base.tasks import tokenized_cohort
+from meds_model_base.tasks import cohort_subjects
 from meds_model_base.testing import skip_if_stub
 
 from {{ model_slug }}.commands import COMMANDS
@@ -29,31 +29,28 @@ def test_workspace_is_published_with_manifests(data_dir):
 
     # Split membership must travel with the artifact, since every command that materializes labels needs
     # it and nothing downstream may depend on the raw MEDS directory still existing. It travels as the
-    # shard layout, which is where meds-torch-data reads it from, rather than as a copy of the source
-    # dataset's subject_splits.parquet -- a copy describes the input to preprocessing, and a pipeline
-    # that filters subjects makes those two different things.
-    assert set(tokenized_cohort(data_dir / "patients"))
+    # representation's own layout (tokenization schemas for mtd, data/ shards for predicates) — never as
+    # a copy of the source dataset's subject_splits.parquet: a copy describes the input to preprocessing,
+    # and a pipeline that filters subjects makes those two different things.
+    assert set(cohort_subjects(data_dir / "patients"))
     assert not (data_dir / "patients" / "metadata" / "subject_splits.parquet").exists()
 
     # Counted from the artifact, so a filtering pipeline shows up here rather than being invisible.
     assert patients["splits"] == {
-        split: len(subjects) for split, subjects in sorted(tokenized_cohort(data_dir / "patients").items())
+        split: len(subjects) for split, subjects in sorted(cohort_subjects(data_dir / "patients").items())
     }
 
 
 def test_inference_never_sees_ground_truth(data_dir, labels_dir, tmp_path):
     """At inference, the labels are not merely dropped from the output — they never reach the model.
 
-    `predict` and `infer` materialize the index without `boolean_value`. meds-torch-data distinguishes a
-    task *index* from task *labels*, so the batch handed to `predict_step` has no `boolean_value` at all,
-    and a model cannot read the answer it is about to be scored against even by accident.
-
+    `predict` and `infer` materialize the index without `boolean_value`; whatever datamodule consumes
+    the materialized layout can only hand the model what is in it. This is the command-level, load-
+    bearing half of the property, so it is backend-agnostic and needs no model and no meds-torch-data.
     Training is the opposite case and is checked here too, so the difference is deliberate rather than
-    incidental. Needs no model.
+    incidental.
     """
     from meds_model_base.tasks import materialize_labels
-    from meds_torchdata import MEDSPytorchDataset, MEDSTorchDataConfig
-    from meds_torchdata.types import SubsequenceSamplingStrategy
 
     patients = data_dir / "patients"
 
@@ -63,6 +60,28 @@ def test_inference_never_sees_ground_truth(data_dir, labels_dir, tmp_path):
 
         written = pl.read_parquet(dest / "held_out.parquet")
         assert ("boolean_value" in written.columns) is expect_labels
+
+
+def test_mtd_distinguishes_a_task_index_from_task_labels(data_dir, labels_dir, tmp_path):
+    """The MTD half of the property above: without `boolean_value` on disk, the batch a model receives
+    has no `boolean_value` at all — it cannot read the answer it is about to be scored against even by
+    accident. A custom datamodule owes the same guarantee (see meds_model_base/lightning/protocol.py);
+    that can only be tested against its implementation, so this test is MTD-specific and skips cleanly
+    where meds-torch-data is not installed.
+    """
+    pytest.importorskip("meds_torchdata")
+    from meds_model_base.manifest import read_manifest
+    from meds_model_base.tasks import materialize_labels
+    from meds_torchdata import MEDSPytorchDataset, MEDSTorchDataConfig
+    from meds_torchdata.types import SubsequenceSamplingStrategy
+
+    patients = data_dir / "patients"
+    if read_manifest(patients).get("representation", "mtd") != "mtd":
+        pytest.skip("the workspace is not an MTD tensorization")
+
+    for include_labels, expect_labels in [(False, False), (True, True)]:
+        dest = tmp_path / f"labels_{include_labels}"
+        materialize_labels(labels_dir, patients, dest, include_labels=include_labels)
 
         dataset = MEDSPytorchDataset(
             MEDSTorchDataConfig(

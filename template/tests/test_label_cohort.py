@@ -1,7 +1,8 @@
-"""Labels are partitioned by the split each subject was actually tokenized into.
+"""Labels are partitioned by the split each subject actually landed in the patients artifact under.
 
 Needs no model, so unlike most of this suite it runs from the moment a repository is generated: the
-``data_dir`` fixture is a real MTD tensorization of the meds-testing-helpers dataset.
+``data_dir`` fixture is a real ``preprocess_data`` run over the meds-testing-helpers dataset, in
+whichever representation this repo's ``data_backend`` selected.
 
 The bug being pinned is quiet by construction. A ``preprocess_data`` pipeline that filters subjects
 tokenizes them away while their labels survive; ``pretrain`` and ``supervised_train`` read training data
@@ -14,12 +15,13 @@ from datetime import datetime
 
 import polars as pl
 import pytest
+from meds_model_base.manifest import read_manifest
 from meds_model_base.tasks import (
     TaskMaterializationError,
+    cohort_subjects,
     materialize_labels,
     read_labels,
     split_labels,
-    tokenized_cohort,
 )
 
 #: Far outside any fixture's id space, so it can only ever be "absent from the cohort".
@@ -33,7 +35,7 @@ def patients_dir(data_dir):
 
 @pytest.fixture
 def cohort(patients_dir):
-    return tokenized_cohort(patients_dir)
+    return cohort_subjects(patients_dir)
 
 
 def _labels(subject_ids):
@@ -46,10 +48,13 @@ def _labels(subject_ids):
     )
 
 
-def test_cohort_is_read_from_the_schema_dirs(patients_dir, cohort):
-    """The cohort comes from where meds-torch-data reads splits, not from ``subject_splits.parquet``."""
-    schema_dir = patients_dir / "tokenization" / "schemas"
-    expected = {p.parts[0] for p in (f.relative_to(schema_dir) for f in schema_dir.rglob("*.parquet"))}
+def test_cohort_is_read_from_the_representations_own_layout(patients_dir, cohort):
+    """The cohort comes from where the representation itself stores splits — the tokenization schema
+    directories for an MTD artifact, the ``data/<split>/`` shard layout for a featurized one — and never
+    from ``subject_splits.parquet``."""
+    representation = read_manifest(patients_dir).get("representation", "mtd")
+    layout = patients_dir / ("tokenization/schemas" if representation == "mtd" else "data")
+    expected = {f.relative_to(layout).parts[0] for f in layout.rglob("*.parquet")}
     assert set(cohort) == expected
     assert all(cohort.values()), "every split should contribute at least one subject"
 
@@ -75,7 +80,7 @@ def test_absent_subjects_are_dropped_with_a_warning(cohort, caplog):
         out = split_labels(_labels([*present, ABSENT_SUBJECT]), cohort)
 
     assert sorted(out[split]["subject_id"].to_list()) == present
-    assert "Dropping 1 label row(s) for 1 subject(s) absent from the tensorized cohort" in caplog.text
+    assert "Dropping 1 label row(s) for 1 subject(s) absent from the patients cohort" in caplog.text
 
 
 def test_a_complete_cohort_is_passed_through_silently(cohort, caplog):

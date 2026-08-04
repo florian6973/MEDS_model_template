@@ -1,0 +1,32 @@
+# Featurization predicates for {{ model_name }} — THE MODEL'S declaration of its concepts.
+#
+# `preprocess_data featurization=predicates external_predicates_file=<this file>` stamps one 0/1
+# `predicate//<name>` column per predicate onto the MEDS data. This file is user-owned (never
+# overwritten by `copier update`) and is the ONE predicates file: the tests read it, MEDS-DEV runs pass
+# it (predicates_path), and production runs use it — replace the starter content below with your real
+# concepts, bound to your dataset's codes.
+#
+# Supported forms (ACES predicate syntax, presence subset — see src/meds_model_base/featurize.py):
+#   exact:    code: SOME//CODE
+#   regex:    code: { regex: "^PREFIX//.*" }       # str.contains — put anchors in the pattern
+#   any-of:   code: { any: [CODE_A, CODE_B] }
+#   derived:  expr: or(name_a, name_b)
+# Anything else (value bounds, and(), ...) is skipped with a warning; `pytest` fails if THIS file needs
+# skipping, because your own declaration should never contain forms featurization cannot use.
+#
+# The starter predicates below bind the synthetic vocabulary of the meds-testing-helpers dataset the
+# test suite runs on, so a fresh repository passes out of the box. At least two predicates with literal
+# codes (exact / any-of) must remain for the designed-signal property test to run.
+predicates:
+  heart_rate:
+    code: HR
+  temperature:
+    code: TEMP
+  admission:
+    code: { regex: "^ADMISSION//.*" }
+  discharge:
+    code: DISCHARGE
+  any_vital:
+    code: { any: [HR, TEMP] }
+  hr_or_temp:
+    expr: or(heart_rate, temperature)

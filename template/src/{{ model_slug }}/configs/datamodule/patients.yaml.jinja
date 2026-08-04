@@ -1,0 +1,25 @@
+{% if data_backend == 'mtd' -%}
+defaults:
+  - config: MEDSTorchDataConfig
+  - _self_
+
+# Task-free view of the cohort, used by pretrain: random windows over each subject's whole timeline.
+_target_: meds_torchdata.extensions.lightning_datamodule.Datamodule
+config:
+  tensorized_cohort_dir: ${input_data_dir}/patients
+  max_seq_len: ${max_seq_len}
+  seq_sampling_strategy: RANDOM
+  static_inclusion_mode: OMIT
+batch_size: ${batch_size}
+num_workers: ${num_workers}
+{%- else -%}
+# Task-free view of the featurized cohort, used by pretrain. The datamodule class is YOURS to implement
+# (src/{{ model_slug }}/datamodule.py) against the surface in meds_model_base/lightning/protocol.py.
+_target_: {{ model_slug }}.datamodule.FeaturizedDataModule
+config:
+  _target_: {{ model_slug }}.datamodule.FeaturizedDataModuleConfig
+  patients_dir: ${input_data_dir}/patients
+  task_labels_dir: null
+batch_size: ${batch_size}
+num_workers: ${num_workers}
+{%- endif %}

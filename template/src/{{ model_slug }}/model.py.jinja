@@ -1,3 +1,4 @@
+{% set batch_type = 'MEDSTorchBatch' if data_backend == 'mtd' else 'Batch' -%}
 """Your model. **This file is a stub — nothing here is implemented.**
 
 The template generates the *command DAG*, not the model: the ``{{ profile }}`` profile decides which
@@ -18,17 +19,23 @@ The DAG calls exactly these hooks, and nothing else:
 Once you implement them, **delete the ``is_stub`` marker**. The conformance tests in ``tests/`` skip while
 it is set and start running when it is gone; they are the contract your model has to satisfy.
 
-``meds_model_base.lightning.modules`` provides the pieces that must know the MEDS batch format —
+{% if data_backend == 'mtd' %}``meds_model_base.lightning.modules`` provides the pieces that must know the MEDS batch format —
 ``CodeEmbedder``, ``padding_mask``, ``masked_mean``. Everything else is yours.
-"""
+{% else %}The batches these hooks receive are whatever your datamodule (``datamodule.py``) collates from the
+featurized patients artifact — the ``Batch`` alias below is yours to replace along with it.
+{% endif %}"""
 {% if profile != 'packaged' %}
 from collections.abc import Callable
 
 {% if profile == 'probe' %}import lightning.pytorch as L
 {% endif %}from meds_model_base.lightning.modules import BaseLightningModule
-from meds_torchdata import MEDSTorchBatch
-from torch import Tensor
-{% endif %}{% if profile == 'packaged' %}
+{% if data_backend == 'mtd' %}from meds_torchdata import MEDSTorchBatch
+{% endif %}from torch import Tensor
+{% if data_backend == 'custom_featurization' %}
+#: Your datamodule's batch type. `object` only marks the stub: replace it (a TypedDict, a dataclass, a
+#: plain Tensor — whatever datamodule.py yields) when you implement the model.
+Batch = object
+{% endif %}{% endif %}{% if profile == 'packaged' %}
 
 class Model:
     """This profile ships trained weights with the repository, so there is no module to train.
@@ -64,7 +71,7 @@ class Model(BaseLightningModule):
         self.save_hyperparameters(ignore=["optimizer", "scheduler"])
         self.vocab_size = vocab_size
 
-    def compute_loss(self, batch: MEDSTorchBatch) -> tuple[Tensor, dict[str, Tensor]]:
+    def compute_loss(self, batch: {{ batch_type }}) -> tuple[Tensor, dict[str, Tensor]]:
         """Return ``(loss, metrics)`` for a training batch.{% if profile in ['finetune', 'probe'] %}
 
         This DAG trains twice. ``batch.has_labels`` distinguishes them: pretraining sees no labels, while
@@ -72,7 +79,7 @@ class Model(BaseLightningModule):
         {% endif %}"""
         raise NotImplementedError("Implement compute_loss in src/{{ model_slug }}/model.py.")
 {% if profile == 'probe' %}
-    def encode(self, batch: MEDSTorchBatch) -> Tensor:
+    def encode(self, batch: {{ batch_type }}) -> Tensor:
         """Return a ``[B, D]`` representation per prediction timepoint.
 
         ``infer`` materializes this as the ``embedding`` column; ``Probe`` is then trained on it. Nothing
@@ -80,7 +87,7 @@ class Model(BaseLightningModule):
         """
         raise NotImplementedError("Implement encode in src/{{ model_slug }}/model.py.")
 {% elif profile == 'zero_shot_materialized' %}
-    def infer_step(self, batch: MEDSTorchBatch) -> dict[str, Tensor]:
+    def infer_step(self, batch: {{ batch_type }}) -> dict[str, Tensor]:
         """Return ``{"predicted_boolean_probability": [B]}`` — the task scores ``infer`` materializes.
 
         ``predict`` reads these back from the artifact instead of re-running the model, so the scores stay
@@ -88,7 +95,7 @@ class Model(BaseLightningModule):
         """
         raise NotImplementedError("Implement infer_step in src/{{ model_slug }}/model.py.")
 {% else %}
-    def predict_step(self, batch: MEDSTorchBatch, batch_idx: int = 0) -> dict[str, Tensor]:
+    def predict_step(self, batch: {{ batch_type }}, batch_idx: int = 0) -> dict[str, Tensor]:
         """Return ``{"predicted_boolean_probability": [B]}`` aligned to the dataloader's sample order.
 
         Optionally add ``predicted_boolean_value``. ``predict`` validates the result against
