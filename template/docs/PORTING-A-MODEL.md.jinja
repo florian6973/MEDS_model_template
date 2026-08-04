@@ -50,6 +50,31 @@ Read the source repository, not its README. Produce a list of:
 - **Metrics logged during training.**
 - **Inference / generation procedure**, including anything stateful (rolling windows, caches, backends).
 - **Size presets** (`micro`/`small`/…) and which one is the sensible default.
+{% if data_backend == 'custom_featurization' %}- **The input variable list.** Every clinical variable the source model consumes, split into **base**
+  (directly observed: a lab, a vital, an event) and **derived** (computed from base ones: ratios,
+  severity scores). Only the base ones become predicates; see Step 3. Enumerate them *before* writing
+  code — the feature space is the model, and discovering a missing variable after training is a rerun.
+
+### Then bind the base variables — reuse before inventing
+
+The base variables have to be bound to the target dataset's codes, and MEDS-DEV already publishes
+per-dataset bindings. Work in this order:
+
+1. **Search every MEDS-DEV dataset's `predicates.yaml`**, not just the one you are targeting
+   (`src/MEDS_DEV/datasets/*/predicates.yaml`). Even a binding for another dataset tells you the
+   ecosystem's **name** for a concept.
+2. **Reuse what exists**, keeping the upstream predicate name where there is one. Matching names is what
+   lets a later reader compare your feature space against a task's cohort definition instead of guessing
+   whether `hr` and `heart_rate` are the same thing.
+3. **Flag what is missing**, explicitly, in the required-concepts table (Step 5). A missing binding has
+   exactly three honest outcomes, and the report says which was chosen: you wrote the binding in this
+   repo's `predicates.yaml`; you contributed it upstream to MEDS-DEV (preferable — it is per-*dataset*
+   knowledge, and every other model benefits); or the dataset does not record the variable at all, which
+   is a deviation that affects results (Step 5, section 3).
+
+Do this **before** implementing anything. Binding is where a port silently loses variables, and a
+predicate that matches nothing costs a training run to discover.
+{% endif -%}
 
 ## Step 2 — The batch-field test
 
@@ -73,10 +98,10 @@ Config paths below are relative to `src/{{ model_slug }}/configs/`.
 | source element | where it goes in this repository |
 |---|---|
 | preprocessing / tokenisation pipeline | `preprocess_data.yaml` → `pipeline:` (a MEDS-transforms YAML), or a documented pre-pass |
-{% if data_backend == 'custom_featurization' %}| named clinical variables / feature list | `predicates.yaml` — one predicate per source variable, bound to the target dataset's codes; each becomes a `predicate//<name>` column |
+{% if data_backend == 'custom_featurization' %}| named clinical variables / feature list (the **base** ones) | `predicates.yaml` — one predicate per directly-observed source variable, bound to the target dataset's codes; each becomes a `predicate//<name>` column |
 | feature construction (grids, aggregation, imputation, value use) | `src/{{ model_slug }}/datamodule.py` — over the featurized artifact, against `meds_model_base/lightning/protocol.py` |
+| **derived / composite variables** (ratios, severity scores, indices) | `src/{{ model_slug }}/datamodule.py`, computed from the base predicate columns + `numeric_value` — **not** a predicate of their own |
 {% endif %}| model architecture | `src/{{ model_slug }}/model.py` — wrap the source package as a dependency, do not vendor a copy |
-| model architecture | `src/{{ model_slug }}/model.py` — wrap the source package as a dependency, do not vendor a copy |
 | pretraining objective | `Model.compute_loss` when `not batch.has_labels` — delegate to the source's own loss where possible |
 | task objective | `Model.compute_loss` when `batch.has_labels` |
 | optimiser / schedule / LR | `optimizer/*.yaml`, and override `configure_optimizers` if the source groups parameters |
@@ -86,6 +111,20 @@ Config paths below are relative to `src/{{ model_slug }}/configs/`.
 | logged metrics | the metrics dict returned from `compute_loss` |
 
 Anything with no home is a finding, not a silence. Record it.
+{% if data_backend == 'custom_featurization' %}
+**Predicates are deliberately *base* quantities, and that split is the flexibility — not a limitation.**
+A source variable with no predicate of its own is only a gap if it cannot be **derived** from the ones
+that exist. A ratio of two measured variables, a severity score summed from components, a
+unit-normalised or clipped quantity: all of these are computed in `datamodule.py` from the base
+predicate columns and `numeric_value`, and porting them that way is a **ported** ledger row (note the
+derivation), not `adapted` and not `omitted`. Inventing a predicate for a derived quantity is the wrong
+move — nothing in the data matches it, so the column is all-zero and the model is silently blind to a
+variable the report claims it has.
+
+What *is* a finding: a base variable the target dataset genuinely does not record, or one you cannot
+bind to codes. That goes in the required-concepts table (Step 5) with an empty binding, not into
+`predicates.yaml` as a predicate matching nothing.
+{% endif -%}
 
 ## Step 4 — Legitimate and illegitimate omissions
 
@@ -124,7 +163,22 @@ Required sections:
 `status = adapted` requires a one-line note on what changed. `status = omitted` requires a justification
 that passes Step 4.
 
-**3. Deviations that affect results.** The subset of the ledger a reader would need to know before
+{% if data_backend == 'custom_featurization' %}**2b. Required concepts.** The model's input variable list (Step 1) as a table — this is what makes the
+feature space reviewable, and what a future reader needs to run this model on another dataset:
+
+| concept | source variable | kind | binding | origin | matched events |
+|---|---|---|---|---|---|
+| `heart_rate` | HR | base | `predicates.yaml` | reused from MEDS-DEV `MIMIC-IV` | 412 903 |
+| `sf_ratio` | SF ratio | derived (`spo2` / `fio2`) | — (`datamodule.py`) | — | — |
+| `gcs_total` | GCS | base | **unbound** | not recorded by this dataset | 0 |
+
+`matched events` is not self-reported: `preprocess_data` logs per-predicate match counts and warns on
+any predicate that matched nothing, and records `featurization.match_counts` in the patients artifact's
+`manifest.yaml`. Copy the numbers from there and name the run. **A base concept with zero matches is a
+finding, not a row to fill in** — either the binding is wrong or the dataset lacks the variable, and both
+belong in section 3.
+
+{% endif %}**3. Deviations that affect results.** The subset of the ledger a reader would need to know before
 comparing numbers to the source's published ones. This section is the point of the document — if it is
 empty, say so explicitly rather than leaving it out.
 
@@ -160,6 +214,13 @@ have only ever been reasoned about.
 
 - [ ] Every entry point in the source's `pyproject.toml` appears in the ledger.
 - [ ] The batch-field test (Step 2) was performed and its conclusion recorded.
+{% if data_backend == 'custom_featurization' %}- [ ] Required concepts (Step 5, section 2b) is present, and every base variable from Step 1 has a row.
+- [ ] MEDS-DEV's existing predicates were searched first; reused bindings keep their upstream names, and
+      each locally-written or missing binding says so.
+- [ ] **No base concept has zero matched events.** Counts come from the artifact's manifest, not from
+      reading the YAML and assuming.
+- [ ] Every derived variable is a ledger row saying where it is computed — not a predicate.
+{% endif %}
 - [ ] Every optimiser detail (grouping, LR, schedule, warmup, clipping) has a ledger row.
 - [ ] Seeding, determinism and matmul precision have ledger rows, and the settings used are in Verification.
 - [ ] Training ran twice at one seed and the reported metric agreed.
