@@ -101,6 +101,19 @@ decides which are registered and how their artifacts connect. The render tests a
 *runnable* DAG: everything a command requires is produced by another command in the chain, and nothing
 produced is left unconsumed.
 
+Pick a **data backend** too — an orthogonal, representation-level choice
+([`docs/design-featurization.md`](docs/design-featurization.md)):
+
+| `data_backend` | `preprocess_data` produces | The model sees | For |
+|---|---|---|---|
+| `mtd` (default) | meds-torch-data tensorization | the dataset's code vocabulary | sequence / foundation models |
+| `custom_featurization` | MEDS parquet + one 0/1 `predicate//<name>` column per predicate in your `predicates.yaml` | the concepts you declared | models built on **named clinical variables** |
+
+Under `custom_featurization` the datamodule is yours to write (against the protocol in
+`meds_model_base/lightning/protocol.py`), meds-torch-data is not installed, and aggregation, imputation
+and derived variables live in your code — which is the point: predicates supply the base quantities, the
+datamodule composes them.
+
 ## What you get
 
 - **`src/<your_model>/model.py`** — **a stub.** The hooks your DAG calls, documented, each raising
@@ -117,6 +130,40 @@ produced is left unconsumed.
   repo: which files it owns, which `copier update` overwrites, the contract rules that look like details
   and are not, and — if it is reimplementing a published model — the required ledger of what was ported,
   adapted, or omitted.
+
+## Porting a published model with a coding agent
+
+The agent-facing docs (`CLAUDE.md`, `docs/PORTING-A-MODEL.md`) render into every generated repository
+because that is where a port actually happens — but an agent only reads them if the task sends it there.
+This prompt does that, and closes the gaps a port otherwise falls into: choosing a backend by default
+rather than by argument, "the tests pass" reported from a run that skipped the tests that matter, and
+elements quietly dropped because they were awkward for the fixture.
+
+```text
+Based on models/cards/<model>/<model>.md, create an implementation of this model under
+models/<model>, generated from https://github.com/florian6973/MEDS_model_template.
+
+Read the rendered CLAUDE.md and docs/PORTING-A-MODEL.md in full before writing any code, and
+follow that procedure. Choose the profile and the data_backend that fit this model, and justify
+both in the report — do not take the defaults by omission.
+
+Perform the most faithful implementation possible, even if it requires more work. Do not drop a
+source element because it is awkward for the test fixture: fix the fixture. Every element of the
+source ends up in the ledger as ported, adapted or omitted, each with evidence.
+
+Then run the tests and report the numbers, not adjectives:
+    uv run pytest -rs                                  # -rs, and no -m filter: the slow
+                                                       # designed-signal tests are the point
+    MEDS_DEV_DIR=<a MEDS-DEV checkout> uv run pytest -m meds_dev -rs
+There must be zero skip_if_stub skips. State the pass/skip counts and account for every skip
+that remains.
+
+Finally write IMPLEMENTATION_REPORT.md exactly as Step 5 of docs/PORTING-A-MODEL.md specifies.
+```
+
+For a `custom_featurization` port, the report's required-concepts table is the part to check first: the
+match counts come from the patients artifact's `manifest.yaml`, and a base concept with **zero** matched
+events means a broken binding, not a variable to shrug at.
 
 ## Configuration
 
