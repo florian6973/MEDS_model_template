@@ -1,12 +1,5 @@
 # MEDS Model Template
 
-> [!WARNING]
-> **This repository is entirely AI-generated (as of this writing) and has not yet been human-reviewed.**
-> It was scaffolded end-to-end by an AI agent: the design, the vendored contract, every model profile,
-> the tests, and this README. It renders and passes its own smoke/property tests locally, but treat every
-> line as unreviewed — audit before relying on it, and expect breaking changes. Not yet validated against a
-> live MEDS-DEV run.
-
 A [Copier](https://copier.readthedocs.io) template for building **standards-conformant
 [MEDS](https://github.com/Medical-Event-Data-Standard/meds) models** that expose a shared five-command
 interface and are directly contributable to
