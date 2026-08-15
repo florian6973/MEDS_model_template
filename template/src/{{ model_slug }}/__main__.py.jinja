@@ -1,12 +1,37 @@
-"""The ``meds-model`` entry point for {{ model_name }}."""
+"""Small backend-neutral command dispatcher."""
 
-from importlib.resources import files
+import json
+import sys
 
-from meds_model_base.dispatch import make_cli
+from meds_model_contract import ModelRepository
 
 from .commands import COMMANDS
 
-cli = make_cli(COMMANDS, str(files("{{ model_slug }}").joinpath("configs")))
+REPOSITORY = ModelRepository("{{ profile }}", COMMANDS)
 
-if __name__ == "__main__":  # pragma: no cover
-    cli()
+
+def _value(text: str):
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        return text
+
+
+def main() -> None:
+    if len(sys.argv) < 2 or sys.argv[1] in {"-h", "--help"}:
+        print("usage: meds-model <command|commands> [key=value ...]")
+        return
+    if sys.argv[1] == "commands":
+        print("\n".join(command.value for command in REPOSITORY.dag))
+        return
+    arguments = {}
+    for item in sys.argv[2:]:
+        if "=" not in item:
+            raise SystemExit(f"Expected key=value, got {item!r}")
+        key, value = item.split("=", 1)
+        arguments[key] = _value(value)
+    REPOSITORY.run(sys.argv[1], arguments)
+
+
+if __name__ == "__main__":
+    main()

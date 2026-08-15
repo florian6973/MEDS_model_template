@@ -1,0 +1,44 @@
+"""Run the completed model's full DAG on the MEDS-DEV MIMIC-IV demo and its predicates."""
+
+from pathlib import Path
+
+import pytest
+
+from {{ model_slug }}.commands import IS_STUB
+
+from .integration import provision_meds_dev
+
+pytestmark = [pytest.mark.slow, pytest.mark.real_data]
+
+
+@pytest.fixture(scope="session")
+def meds_dev(request, tmp_path_factory):
+    if IS_STUB:
+        pytest.skip("model_stub: MIMIC-IV demo runs only after the real DAG is implemented")
+    return provision_meds_dev(request, tmp_path_factory)
+
+
+def test_full_dag_on_mimic_iv_demo(meds_dev: Path, tmp_path: Path):
+    import polars as pl
+    import yaml
+    from meds_evaluation.schema import PredictionSchema
+
+    from .e2e import prepare_mimic_demo, run_e2e
+
+    dataset_dir, labels_dir, predicates_file = prepare_mimic_demo(meds_dev, tmp_path)
+    assert dataset_dir.is_dir() and labels_dir.exists()
+    assert predicates_file.is_file(), "reuse MEDS-DEV's MIMIC-IV predicates; do not duplicate them"
+
+    artifacts = run_e2e(
+        tmp_path / "mimic-run",
+        external_meds_dir=dataset_dir,
+        external_labels_dir=labels_dir,
+        external_predicates_file=predicates_file,
+    )
+    predictions_dir = artifacts["predict"]
+    predictions = pl.read_parquet(predictions_dir / "predictions.parquet")
+    PredictionSchema.align(predictions.to_arrow())
+    assert predictions.height > 0
+    assert predictions.select("subject_id", "prediction_time").unique().height == predictions.height
+    manifest = yaml.safe_load((predictions_dir / "manifest.yaml").read_text())
+    assert all(value["n_expected"] == value["n_written"] > 0 for value in manifest["coverage"].values())

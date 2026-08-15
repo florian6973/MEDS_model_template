@@ -1,19 +1,7 @@
 __pycache__/
-*.py[cod]
-*.egg-info/
-.venv/
 .pytest_cache/
-.ruff_cache/
-.coverage
-.hypothesis/
-*.ckpt
-*.nrt
-outputs/
-multirun/
-# The default workspace: `env.sh` points OUTPUT_DIR here and the README's examples write to runs/data.
-runs/
-lightning_logs/
-logs/
-mlruns/
-wandb/
-.DS_Store
+.venv/
+*.egg-info/
+runs/*/logs/
+runs/*/artifacts/
+runs/*/checkpoints/

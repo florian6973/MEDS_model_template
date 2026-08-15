@@ -1,0 +1,46 @@
+# Implementation guide
+
+## 1. Inspect the source
+
+Source: `{{ implementation_source if implementation_source else '<paper/repository not yet supplied>' }}`
+
+Read the paper, supplement, repository, configs, data preparation, checkpoints, and evaluation code.
+Build a source-element inventory before implementation; do not infer the model solely from its headline
+architecture.
+
+## 2. Justify the DAG
+
+This repository selected `{{ profile }}`. Confirm that its command graph matches the source's actual
+training and prediction lifecycle. Record the justification in `IMPLEMENTATION_REPORT.md`; do not change
+graphs merely to avoid implementing a stage.
+
+## 3. Map inputs
+
+Document how MEDS events and task timepoints enter the model. If dataset predicates are useful, accept
+`external_predicates_file`, declare which names are required, and implement their interpretation in
+model-owned code. Reuse MEDS-DEV's MIMIC predicates for the demo test. Do not create a generic feature
+format in the contract package.
+
+## 4. Implement commands
+
+Implement every class registered in `COMMANDS`. Preserve standard external arguments. Choose and version
+intermediate payload formats, reject incompatible inputs before expensive work, publish atomically, and
+record input digests and measurements. Frameworks, subprocesses, services, batching, and non-batched
+systems are all allowed.
+
+## 5. Complete operational interfaces
+
+Finalize `model.yaml`, `requirements.txt`, `tests/e2e.py`, and `slurm/config.sh`. The local adapter runs the
+real DAG. The MEDS-DEV adapter supplies its isolated invocation. The MIMIC adapter locates/builds the demo
+and the pinned `mortality/in_icu/first_24h` task through MEDS-DEV and reuses its predicates.
+
+## 6. Verify
+
+Run `uv run pytest -rs`, `uv run pytest -m meds_dev -rs`, and `uv run pytest -m real_data -rs`. Final
+predictions must exactly cover the requested keys without relying on order. Do not assert portable
+performance thresholds; record wall time, process-tree PSS/RSS, GPU metrics, environment, and scale.
+
+## 7. Report
+
+Complete every section of `IMPLEMENTATION_REPORT.md`. Every material source element is ported, adapted,
+or omitted with evidence. Remove all placeholders and set `IS_STUB = False` only when the real tests run.

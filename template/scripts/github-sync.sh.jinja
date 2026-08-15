@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# Publish structured cluster evidence on an isolated run branch. Never uploads datasets, checkpoints,
+# credentials, or raw logs. A failed push leaves the committed result recoverable in this checkout.
+set -euo pipefail
+
+if [[ $# -ne 1 ]]; then
+  echo "usage: scripts/github-sync.sh RUN_ID" >&2
+  exit 2
+fi
+
+run_id="$1"
+result_dir="runs/$run_id"
+if [[ ! -f "$result_dir/result.yaml" ]]; then
+  echo "$result_dir/result.yaml does not exist; refusing to publish an incomplete run" >&2
+  exit 1
+fi
+
+branch="runs/{{ model_slug }}/$run_id"
+git switch -c "$branch"
+git add "$result_dir/spec.yaml" "$result_dir/result.yaml" "$result_dir/manifests"
+git commit -m "Record {{ model_slug }} run $run_id"
+if ! git push --set-upstream origin "$branch"; then
+  echo "Push failed; the result remains committed locally on $branch" >&2
+  exit 1
+fi
+
+if command -v gh >/dev/null 2>&1; then
+  gh pr create --draft --title "Run result: $run_id" --body "Structured cluster result for $run_id."
+fi

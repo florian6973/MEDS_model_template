@@ -1,33 +1,4 @@
-## MEDS-DEV model specification for {{ model_name }} (the {{ profile }} DAG).
-##
-## MEDS-DEV runs each command string in an isolated environment (built from `requirements.txt`) and fills
-## the {curly} placeholders. Only `supervised.predict` is mandatory.
-##
-## Two facts about MEDS-DEV shape what follows:
-##
-##  * There is no preprocess slot, so `preprocess_data` is folded into the first command of each chain,
-##    writing the shared workspace to {output_dir}/data.
-##  * `{model_initialization_dir}` is a single rolling pointer: it becomes the most recent *training*
-##    output. For a chain with both an unsupervised and a supervised train, that is not where the
-##    workspace lives — so `predict` omits `input_data_dir` entirely and recovers it from its source
-##    model's manifest, which recorded the workspace that model was trained on.
-##
-## `labels_dir` is available in every `supervised.*` slot (it is gated on dataset type, not on the slot),
-## which is why no separate task-preparation step is needed: each command materializes what it needs.
-##
-## `metadata` is parsed into `MEDS_DEV.utils.Metadata`, which accepts exactly `description`, `contacts`
-## and `links` — nothing else. MEDS-DEV builds this at *import* time for every registered model, so an
-## extra key here raises TypeError and takes down the whole `meds-dev-*` CLI, not just this model.
-## In particular `requirements.txt` must NOT be declared: the loader discovers it from the model
-## directory on disk.
-{% set preprocess_extra = ' external_predicates_file={predicates_path}' if data_backend == 'custom_featurization' else '' -%}
-{% if data_backend == 'custom_featurization' -%}
-##
-## This model featurizes via predicates, so `{predicates_path}` is REQUIRED: pass
-## `predicates_path=<file>` to `meds-dev-model` (MEDS-DEV >= PR#325; the model's own predicates.yaml —
-## shipped into this model's MEDS-DEV directory by `meds-model-add-to-meds-dev` — is the reference).
-## Without it, command formatting fails with a KeyError naming predicates_path.
-{% endif -%}
+## MEDS-DEV descriptor for {{ model_name }}. This retains the established command-slot interface.
 metadata:
   description: "{{ model_description }}"
   contacts:
@@ -35,52 +6,24 @@ metadata:
       email: "{{ author_email }}"
 
 commands:
-{% if profile == 'supervised' %}  supervised:
+{% if profile in ['finetune', 'probe', 'zero_shot_direct', 'zero_shot_materialized'] %}  unsupervised:
     train: |-
-      meds-model preprocess_data external_meds_dir={dataset_dir} output_data_dir={output_dir}/data{{ preprocess_extra }} do_overwrite=true
-      meds-model supervised_train input_data_dir={output_dir}/data external_labels_dir={labels_dir} output_supervised_model_dir={output_dir}/model
-    predict: |-
-      meds-model predict input_supervised_model_dir={model_initialization_dir}/model external_labels_dir={labels_dir} splits=[{split}] output_predictions_dir={output_dir} do_overwrite=true
-{% elif profile == 'finetune' %}  unsupervised:
-    train: |-
-      meds-model preprocess_data external_meds_dir={dataset_dir} output_data_dir={output_dir}/data{{ preprocess_extra }} do_overwrite=true
+      meds-model preprocess_data external_meds_dir={dataset_dir}{% if uses_predicates %} external_predicates_file={predicates_path}{% endif %} output_data_dir={output_dir}/data do_overwrite=true
       meds-model pretrain input_data_dir={output_dir}/data output_pretrained_model_dir={output_dir}/pretrained
-  supervised:
-    train: |-
-      meds-model supervised_train input_data_dir={model_initialization_dir}/data external_labels_dir={labels_dir} input_pretrained_model_dir={model_initialization_dir}/pretrained output_supervised_model_dir={output_dir}/model
-    predict: |-
-      meds-model predict input_supervised_model_dir={model_initialization_dir}/model external_labels_dir={labels_dir} splits=[{split}] output_predictions_dir={output_dir} do_overwrite=true
-{% elif profile == 'probe' %}  unsupervised:
-    train: |-
-      meds-model preprocess_data external_meds_dir={dataset_dir} output_data_dir={output_dir}/data{{ preprocess_extra }} do_overwrite=true
-      meds-model pretrain input_data_dir={output_dir}/data output_pretrained_model_dir={output_dir}/pretrained
-  supervised:
-    train: |-
-      meds-model infer input_data_dir={model_initialization_dir}/data input_pretrained_model_dir={model_initialization_dir}/pretrained external_labels_dir={labels_dir} do_overwrite=true
+{% endif %}  supervised:
+{% if profile in ['supervised', 'finetune', 'probe'] %}    train: |-
+{% if profile == 'supervised' %}      meds-model preprocess_data external_meds_dir={dataset_dir}{% if uses_predicates %} external_predicates_file={predicates_path}{% endif %} output_data_dir={output_dir}/data do_overwrite=true
+{% endif %}{% if profile == 'probe' %}      meds-model infer input_data_dir={model_initialization_dir}/data input_pretrained_model_dir={model_initialization_dir}/pretrained external_labels_dir={labels_dir} output_inference_subdir=inference/embeddings do_overwrite=true
       meds-model supervised_train input_data_dir={model_initialization_dir}/data external_labels_dir={labels_dir} input_inference_subdir=inference/embeddings output_supervised_model_dir={output_dir}/model
-    predict: |-
-      meds-model predict input_supervised_model_dir={model_initialization_dir}/model external_labels_dir={labels_dir} splits=[{split}] output_predictions_dir={output_dir} do_overwrite=true
-{% elif profile == 'zero_shot_materialized' %}  unsupervised:
-    train: |-
-      meds-model preprocess_data external_meds_dir={dataset_dir} output_data_dir={output_dir}/data{{ preprocess_extra }} do_overwrite=true
-      meds-model pretrain input_data_dir={output_dir}/data output_pretrained_model_dir={output_dir}/pretrained
-  supervised:
-    train: null
-    predict: |-
-      meds-model infer input_data_dir={model_initialization_dir}/data input_pretrained_model_dir={model_initialization_dir}/pretrained external_labels_dir={labels_dir} do_overwrite=true
-      meds-model predict input_data_dir={model_initialization_dir}/data input_inference_subdir=inference/embeddings external_labels_dir={labels_dir} splits=[{split}] output_predictions_dir={output_dir} do_overwrite=true
-{% elif profile == 'packaged' %}  unsupervised: null
-  supervised:
-    train: null
-    predict: |-
-      meds-model preprocess_data external_meds_dir={dataset_dir} output_data_dir={output_dir}/data{{ preprocess_extra }} do_overwrite=true
-      meds-model predict input_data_dir={output_dir}/data external_labels_dir={labels_dir} splits=[{split}] output_predictions_dir={output_dir} do_overwrite=true
-{% else %}  unsupervised:
-    train: |-
-      meds-model preprocess_data external_meds_dir={dataset_dir} output_data_dir={output_dir}/data{{ preprocess_extra }} do_overwrite=true
-      meds-model pretrain input_data_dir={output_dir}/data output_pretrained_model_dir={output_dir}/pretrained
-  supervised:
-    train: null
-    predict: |-
-      meds-model predict input_pretrained_model_dir={model_initialization_dir}/pretrained external_labels_dir={labels_dir} splits=[{split}] output_predictions_dir={output_dir} do_overwrite=true
-{% endif -%}
+{% elif profile == 'finetune' %}      meds-model supervised_train input_data_dir={model_initialization_dir}/data external_labels_dir={labels_dir} input_pretrained_model_dir={model_initialization_dir}/pretrained output_supervised_model_dir={output_dir}/model
+{% else %}      meds-model supervised_train input_data_dir={output_dir}/data external_labels_dir={labels_dir} output_supervised_model_dir={output_dir}/model
+{% endif %}
+{% else %}    train: null
+{% endif %}    predict: |-
+{% if profile == 'packaged' %}      meds-model preprocess_data external_meds_dir={dataset_dir}{% if uses_predicates %} external_predicates_file={predicates_path}{% endif %} output_data_dir={output_dir}/data do_overwrite=true
+{% elif profile == 'zero_shot_materialized' %}      meds-model infer input_data_dir={model_initialization_dir}/data input_pretrained_model_dir={model_initialization_dir}/pretrained external_labels_dir={labels_dir} output_inference_subdir=inference/materialized do_overwrite=true
+{% endif %}{% if profile in ['supervised', 'finetune', 'probe'] %}      meds-model predict input_supervised_model_dir={model_initialization_dir}/model external_labels_dir={labels_dir} splits=[{split}] output_predictions_dir={output_dir} do_overwrite=true
+{% elif profile == 'zero_shot_materialized' %}      meds-model predict input_data_dir={model_initialization_dir}/data input_inference_subdir=inference/materialized external_labels_dir={labels_dir} splits=[{split}] output_predictions_dir={output_dir} do_overwrite=true
+{% elif profile == 'zero_shot_direct' %}      meds-model predict input_pretrained_model_dir={model_initialization_dir}/pretrained external_labels_dir={labels_dir} splits=[{split}] output_predictions_dir={output_dir} do_overwrite=true
+{% else %}      meds-model predict input_data_dir={output_dir}/data external_labels_dir={labels_dir} splits=[{split}] output_predictions_dir={output_dir} do_overwrite=true
+{% endif %}

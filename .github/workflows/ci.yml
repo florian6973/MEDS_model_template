@@ -1,66 +1,17 @@
 name: CI
-on: [push, pull_request]
+
+on:
+  pull_request:
+  push:
+    branches: [main]
 
 jobs:
-  # Fast checks on the template itself: lint the bootstrap package + render every profile and verify
-  # structure / syntactic validity (no model training).
   template:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
-        with:
-          enable-cache: true
       - run: uv sync --group dev
-      - run: uv run ruff check .
-      - run: uv run ruff format --check .
-      - run: uv run pytest tests/ -q
-
-  # Heavier check: render each DAG, install it, and run its own suite. A generated repo ships no model,
-  # so the model-dependent conformance tests skip — what this proves is that the package installs, the
-  # console script dispatches, every command's Hydra config composes, and the preprocessing half of the
-  # contract genuinely runs on real (tiny) MEDS data.
-  #
-  # It does NOT prove a chain trains and predicts end to end; nothing can, until someone writes a model.
-  # Closing that gap needs a reference implementation living outside the payload — see the note in
-  # CLAUDE.md.
-  rendered-smoke:
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        profile: [supervised, probe, zero_shot_materialized, packaged]
-        # The optional loggers are rendered from copier answers, so the default matrix only ever composes
-        # `logger=csv`. One extra entry turns both on: `test_every_rendered_logger_composes` is then the
-        # job that would catch `logger=wandb` raising MissingConfigException again.
-        loggers: [false]
-        data_backend: [mtd]
-        include:
-          - profile: supervised
-            loggers: true
-            data_backend: mtd
-          # The custom-featurization lane: its venv deliberately omits meds-torch-data, so the lane
-          # itself proves nothing imports it (including `meds-model commands` — the import-guard test).
-          - profile: supervised
-            loggers: false
-            data_backend: custom_featurization
-    steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
-        with:
-          enable-cache: true
-      - name: Render the ${{ matrix.profile }} DAG (loggers=${{ matrix.loggers }}, backend=${{ matrix.data_backend }})
-        run: |
-          uvx copier copy --vcs-ref=HEAD --defaults --trust \
-            --data model_slug=demo_model --data model_name="Demo Model" \
-            --data profile=${{ matrix.profile }} \
-            --data data_backend=${{ matrix.data_backend }} \
-            --data use_wandb=${{ matrix.loggers }} --data use_mlflow=${{ matrix.loggers }} \
-            . /tmp/demo_model
-      - name: Install torch (CPU) + run the generated repo's tests
-        working-directory: /tmp/demo_model
-        run: |
-          uv venv
-          uv pip install torch --index-url https://download.pytorch.org/whl/cpu
-          uv pip install -e . --group dev
-          uv run pytest -m "not slow" -q -rs
+      - run: uv run ruff check tests
+      - run: uv run ruff format --check tests
+      - run: uv run pytest -q

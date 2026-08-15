@@ -1,49 +1,84 @@
-{%- set entries = [('preprocess_data', 'DefaultPreprocessDataCommand')] -%}
-{%- if profile == 'supervised' -%}
-  {%- set _ = entries.append(('supervised_train', 'DefaultSupervisedTrainCommand')) -%}
-  {%- set _ = entries.append(('predict', 'SupervisedPredictCommand')) -%}
-{%- elif profile == 'finetune' -%}
-  {%- set _ = entries.append(('pretrain', 'DefaultPretrainCommand')) -%}
-  {%- set _ = entries.append(('supervised_train', 'DefaultSupervisedTrainCommand')) -%}
-  {%- set _ = entries.append(('predict', 'SupervisedPredictCommand')) -%}
-{%- elif profile == 'probe' -%}
-  {%- set _ = entries.append(('pretrain', 'DefaultPretrainCommand')) -%}
-  {%- set _ = entries.append(('infer', 'DefaultInferCommand')) -%}
-  {%- set _ = entries.append(('supervised_train', 'ProbeTrainCommand')) -%}
-  {%- set _ = entries.append(('predict', 'ProbePredictCommand')) -%}
-{%- elif profile == 'zero_shot_direct' -%}
-  {%- set _ = entries.append(('pretrain', 'DefaultPretrainCommand')) -%}
-  {%- set _ = entries.append(('predict', 'PredictCommand')) -%}
-{%- elif profile == 'zero_shot_materialized' -%}
-  {%- set _ = entries.append(('pretrain', 'DefaultPretrainCommand')) -%}
-  {%- set _ = entries.append(('infer', 'DefaultInferCommand')) -%}
-  {%- set _ = entries.append(('predict', 'MaterializedPredictCommand')) -%}
-{%- elif profile == 'packaged' -%}
-  {%- set _ = entries.append(('predict', 'PredictCommand')) -%}
-{%- else -%}
-  {%- if implements_pretrain -%}{%- set _ = entries.append(('pretrain', 'DefaultPretrainCommand')) -%}{%- endif -%}
-  {%- if implements_infer -%}{%- set _ = entries.append(('infer', 'DefaultInferCommand')) -%}{%- endif -%}
-  {%- if implements_supervised_train -%}{%- set _ = entries.append(('supervised_train', 'DefaultSupervisedTrainCommand')) -%}{%- endif -%}
-  {%- if implements_predict -%}{%- set _ = entries.append(('predict', 'SupervisedPredictCommand')) -%}{%- endif -%}
-{%- endif -%}
-{%- set classes = entries | map(attribute=1) | list -%}
-{%- set base_imports = ['CommandName'] + (classes | reject('equalto', 'PredictCommand') | list | unique | sort | list) -%}
-"""Which of the five commands this model supports — the ``{{ profile }}`` DAG.
+"""Model-owned command implementations for the {{ profile }} DAG.
 
-The ``COMMANDS`` registry maps each supported
-:class:`~meds_model_base.commands.base.CommandName` to the class implementing it. ``meds-model`` consults
-it: an unsupported command exits with a message naming what *is* supported.
-
-This is the one piece of the DAG that has to be Python rather than configuration — the dispatcher needs it
-before Hydra composes anything. Edit it freely: swap in your own subclass, add a command, or drop one.
+Replace the bodies below. The contract deliberately does not prescribe batching, frameworks, payload
+formats, or checkpointing. Keep ``IS_STUB`` true until the rendered end-to-end test runs the real DAG.
 """
 
-from meds_model_base.commands import (
-{% for name in base_imports %}    {{ name }},
-{% endfor %})
-{% if 'PredictCommand' in classes %}
-from .predict import PredictCommand
+from pathlib import Path
+
+from meds_model_contract import ArtifactType, Command, CommandName, measured_artifact
+
+IS_STUB = True
+
+
+class StubCommand(Command):
+    artifact_type: ArtifactType
+    output_argument: str
+
+    def resolve_output(self, arguments):
+        return arguments.get(self.output_argument)
+
+    def run(self, arguments):
+        output = self.resolve_output(arguments)
+        if output is None:
+            raise ValueError(f"{self.name.value} requires {self.output_argument}=<path>")
+        with measured_artifact(
+            Path(output),
+            artifact_type=self.artifact_type.value,
+            command=self.name.value,
+            producer=f"{{ model_slug }}.commands.{type(self).__name__}",
+            payload_format="stub/v1",
+            external_predicates_file=arguments.get("external_predicates_file"),
+            overwrite=bool(arguments.get("do_overwrite", False)),
+        ):
+            raise NotImplementedError(
+                f"Implement {type(self).__name__}.run in src/{{ model_slug }}/commands.py"
+            )
+
+
+{% if profile in ['supervised', 'finetune', 'probe', 'zero_shot_direct', 'zero_shot_materialized', 'packaged'] %}
+class PreprocessData(StubCommand):
+    name = CommandName.preprocess_data
+    artifact_type = ArtifactType.patients
+    output_argument = "output_data_dir"
 {% endif %}
+{% if profile in ['finetune', 'probe', 'zero_shot_direct', 'zero_shot_materialized'] %}
+
+class Pretrain(StubCommand):
+    name = CommandName.pretrain
+    artifact_type = ArtifactType.pretrained_model
+    output_argument = "output_pretrained_model_dir"
+{% endif %}
+{% if profile in ['probe', 'zero_shot_materialized'] %}
+
+class Infer(StubCommand):
+    name = CommandName.infer
+    artifact_type = ArtifactType.inference
+    output_argument = "output_inference_subdir"
+
+    def resolve_output(self, arguments):
+        if arguments.get("input_data_dir") and arguments.get(self.output_argument):
+            return Path(arguments["input_data_dir"]) / arguments[self.output_argument]
+        return None
+{% endif %}
+{% if profile in ['supervised', 'finetune', 'probe'] %}
+
+class SupervisedTrain(StubCommand):
+    name = CommandName.supervised_train
+    artifact_type = ArtifactType.supervised_model
+    output_argument = "output_supervised_model_dir"
+{% endif %}
+
+class Predict(StubCommand):
+    name = CommandName.predict
+    artifact_type = ArtifactType.predictions
+    output_argument = "output_predictions_dir"
+
+
 COMMANDS = {
-{% for command, cls in entries %}    CommandName.{{ command }}: {{ cls }},
-{% endfor %}}
+{% if profile in ['supervised', 'finetune', 'probe', 'zero_shot_direct', 'zero_shot_materialized', 'packaged'] %}    CommandName.preprocess_data: PreprocessData,
+{% endif %}{% if profile in ['finetune', 'probe', 'zero_shot_direct', 'zero_shot_materialized'] %}    CommandName.pretrain: Pretrain,
+{% endif %}{% if profile in ['probe', 'zero_shot_materialized'] %}    CommandName.infer: Infer,
+{% endif %}{% if profile in ['supervised', 'finetune', 'probe'] %}    CommandName.supervised_train: SupervisedTrain,
+{% endif %}    CommandName.predict: Predict,
+}
