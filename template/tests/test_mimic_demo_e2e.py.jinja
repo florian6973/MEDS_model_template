@@ -6,7 +6,7 @@ import pytest
 
 from {{ model_slug }}.commands import IS_STUB
 
-from .integration import provision_meds_dev
+from .integration import assert_prediction_keys, provision_meds_dev
 
 pytestmark = [pytest.mark.slow, pytest.mark.real_data]
 
@@ -20,7 +20,6 @@ def meds_dev(request, tmp_path_factory):
 
 def test_full_dag_on_mimic_iv_demo(meds_dev: Path, tmp_path: Path):
     import polars as pl
-    import yaml
     from meds_evaluation.schema import PredictionSchema
 
     from .e2e import prepare_mimic_demo, run_e2e
@@ -29,16 +28,17 @@ def test_full_dag_on_mimic_iv_demo(meds_dev: Path, tmp_path: Path):
     assert dataset_dir.is_dir() and labels_dir.exists()
     assert predicates_file.is_file(), "reuse MEDS-DEV's MIMIC-IV predicates; do not duplicate them"
 
-    artifacts = run_e2e(
+    result = run_e2e(
         tmp_path / "mimic-run",
         external_meds_dir=dataset_dir,
         external_labels_dir=labels_dir,
         external_predicates_file=predicates_file,
+        splits=["held_out"],
     )
+    artifacts = result.artifacts
     predictions_dir = artifacts["predict"]
     predictions = pl.read_parquet(predictions_dir / "predictions.parquet")
     PredictionSchema.align(predictions.to_arrow())
     assert predictions.height > 0
     assert predictions.select("subject_id", "prediction_time").unique().height == predictions.height
-    manifest = yaml.safe_load((predictions_dir / "manifest.yaml").read_text())
-    assert all(value["n_expected"] == value["n_written"] > 0 for value in manifest["coverage"].values())
+    assert_prediction_keys(predictions_dir, labels_dir, ["held_out"])

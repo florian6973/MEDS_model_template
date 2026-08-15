@@ -17,7 +17,8 @@ def test_end_to_end(tmp_path: Path):
         pytest.skip("model_stub: implement commands and the repository-specific run_e2e adapter")
     from .e2e import run_e2e
 
-    artifacts = run_e2e(tmp_path)
+    result = run_e2e(tmp_path)
+    artifacts = result.artifacts
     assert list(artifacts) == [command.value for command in DAGS["{{ profile }}"]]
     for command, directory in artifacts.items():
         manifest = read_manifest(directory)
@@ -27,6 +28,6 @@ def test_end_to_end(tmp_path: Path):
         assert resources["memory"]["peak_process_tree_rss_bytes"] > 0
     prediction_manifest = read_manifest(artifacts["predict"])
     assert prediction_manifest["artifact"]["type"] == "predictions"
-    coverage = prediction_manifest.get("coverage", {})
-    assert coverage, "predict must record expected/written coverage by evaluated split"
-    assert all(value["n_expected"] == value["n_written"] > 0 for value in coverage.values())
+    from .integration import assert_prediction_keys
+
+    assert_prediction_keys(artifacts["predict"], result.labels_dir, result.splits)

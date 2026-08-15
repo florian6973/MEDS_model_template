@@ -152,6 +152,11 @@ by `meds-task-selection` so all model repositories evaluate the same task defini
 Set `MEDS_DEV_DIR=/path/to/MEDS-DEV` to reuse a checkout and `MEDS_DEMO_DIR=/path/to/demo` to reuse the
 dataset. A bare test run never clones MEDS-DEV or downloads MIMIC data.
 
+Until MEDS-DEV PR #325 is merged, automatic integration provisioning pins commit
+`0c21a2226964181dee7ed28c9aa5aa0abdfe9765`, which supplies the explicit `predicates_path` passthrough.
+Set `MEDS_DEV_REF` to select another revision containing that capability. Reused `MEDS_DEV_DIR` checkouts
+are capability-checked rather than silently using a model-side fallback.
+
 ## Cluster and result interfaces
 
 ```bash
@@ -185,5 +190,6 @@ registration. To test the rendered repository itself, render it into a temporary
 uv run --project /tmp/my-render --extra test pytest /tmp/my-render/tests -q -rs
 ```
 
-The authority is [`SPEC.md`](SPEC.md). Files under `template/` are the generated payload; root tests
+The authority is [`template/SPEC.md`](template/SPEC.md), which Copier renders as `SPEC.md` in generated
+repositories. Files under `template/` are the generated payload; root tests
 validate that payload without imposing a model implementation.

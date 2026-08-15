@@ -8,9 +8,10 @@ import resource
 import shutil
 import threading
 import time
+from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
 import yaml
 
@@ -114,6 +115,7 @@ def measured_artifact(
     payload_format: str,
     inputs: dict[str, Any] | None = None,
     config_digest: str | None = None,
+    semantics_digest: str | None = None,
     external_predicates_file: Path | str | None = None,
     overwrite: bool = False,
 ) -> Iterator[Path]:
@@ -147,6 +149,7 @@ def measured_artifact(
             },
             "command": {"name": command, "config_digest": config_digest},
             "inputs": recorded_inputs,
+            "semantics_digest": semantics_digest,
             "resources": {
                 "wall_seconds": time.monotonic() - started,
                 "memory": {

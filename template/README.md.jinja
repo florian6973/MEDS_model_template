@@ -62,6 +62,10 @@ uv run pytest -m real_data -rs
   `mortality/in_icu/first_24h` task, and MEDS-DEV's
   MIMIC predicates. Set `MEDS_DEMO_DIR` to reuse an existing demo and `MEDS_DEV_DIR` to reuse a checkout.
 
+Until MEDS-DEV PR #325 is merged, automatic provisioning pins its tested predicates-passthrough commit.
+Set `MEDS_DEV_REF` to use another revision containing that capability. A checkout supplied through
+`MEDS_DEV_DIR` is checked and fails clearly if it cannot populate `{predicates_path}`.
+
 Both integration tiers explicitly `model_stub`-skip until implementation is complete. A completed port
 must have zero `model_stub` skips and must account for every other skip using `-rs` output.
 
@@ -72,7 +76,8 @@ synchronization. Full-data cluster jobs run only from a clean, pushed commit and
 `work/` task bundle produced by `meds-task-selection`.
 
 Final predictions must conform to MEDS evaluation, contain unique `(subject_id, prediction_time)` keys,
-and exactly cover the requested evaluation index. Row order is never an association mechanism.
+and exactly cover the requested evaluation index. Tests compare the actual key sets; self-reported manifest
+counts are not accepted as evidence. Row order is never an association mechanism.
 
 ## Measurements
 

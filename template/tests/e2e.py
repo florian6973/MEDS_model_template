@@ -1,18 +1,39 @@
 """Model-owned DAG adapters plus shared MEDS-DEV MIMIC demo provisioning."""
 
 import os
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
+
+
+@dataclass(frozen=True)
+class E2EResult:
+    """Artifacts plus the requested evaluation index used to verify prediction keys."""
+
+    artifacts: Mapping[str, Path]
+    labels_dir: Path
+    splits: Sequence[str]
+
+
+@dataclass(frozen=True)
+class MEDSDevRun:
+    """MEDS-DEV invocation plus the evaluation index its predictions must cover."""
+
+    args: Sequence[str]
+    predictions_dir: Path
+    labels_dir: Path
+    splits: Sequence[str]
 
 
 def run_e2e(tmp_path, **inputs):
     raise NotImplementedError(
         "Prepare a small MEDS input/task, execute the selected DAG's real commands, and return "
-        "{command_name: artifact_directory}."
+        "E2EResult(artifacts, labels_dir, evaluated splits)."
     )
 
 
 def prepare_meds_dev_run(meds_dev, tmp_path):
-    """Return ``(meds-dev-model arguments, predictions_dir)`` for this implementation."""
+    """Return ``MEDSDevRun(args, predictions_dir, labels_dir, splits)`` for this implementation."""
     raise NotImplementedError("Configure the selected DAG's real MEDS-DEV run")
 
 

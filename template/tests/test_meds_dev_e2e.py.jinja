@@ -7,7 +7,7 @@ import pytest
 from meds_model_contract.meds_dev import register
 from {{ model_slug }}.commands import IS_STUB
 
-from .integration import RUN_TIMEOUT, provision_meds_dev, run, venv_bin
+from .integration import RUN_TIMEOUT, assert_prediction_keys, provision_meds_dev, run, venv_bin
 
 pytestmark = [pytest.mark.slow, pytest.mark.meds_dev]
 ROOT = Path(__file__).parents[1]
@@ -30,15 +30,15 @@ def test_meds_dev_runs_model_yaml(meds_dev, tmp_path):
 
     registered = register(ROOT, meds_dev, MODEL_NAME)
     assert (registered / "model.yaml").is_file()
-    args, predictions_dir = prepare_meds_dev_run(meds_dev, tmp_path)
-    run([venv_bin(meds_dev) / "meds-dev-model", f"model={MODEL_NAME}", *args], timeout=RUN_TIMEOUT)
+    prepared = prepare_meds_dev_run(meds_dev, tmp_path)
+    run([venv_bin(meds_dev) / "meds-dev-model", f"model={MODEL_NAME}", *prepared.args], timeout=RUN_TIMEOUT)
 
-    predictions_file = predictions_dir / "predictions.parquet"
+    predictions_file = prepared.predictions_dir / "predictions.parquet"
     predictions = pl.read_parquet(predictions_file)
     PredictionSchema.align(predictions.to_arrow())
     assert predictions.height > 0
     assert predictions.select("subject_id", "prediction_time").unique().height == predictions.height
-    manifest = yaml.safe_load((predictions_dir / "manifest.yaml").read_text())
+    manifest = yaml.safe_load((prepared.predictions_dir / "manifest.yaml").read_text())
     assert manifest["artifact"]["type"] == "predictions"
-    assert all(value["n_expected"] == value["n_written"] > 0 for value in manifest["coverage"].values())
+    assert_prediction_keys(prepared.predictions_dir, prepared.labels_dir, prepared.splits)
     assert manifest["resources"]["memory"]["peak_process_tree_rss_bytes"] > 0

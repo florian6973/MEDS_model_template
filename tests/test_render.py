@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import compileall
+import importlib.util
 import os
 import subprocess
 from pathlib import Path
@@ -43,6 +44,15 @@ def render(dst: Path, profile: str, *, uses_predicates: bool = False) -> str:
     return slug
 
 
+def load_integration_module(rendered: Path):
+    path = rendered / "tests" / "integration.py"
+    spec = importlib.util.spec_from_file_location(f"rendered_integration_{id(rendered)}", path)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
+
+
 @pytest.mark.parametrize("profile", DAGS)
 def test_renders_six_minimal_dags(tmp_path, profile):
     dst = tmp_path / profile
@@ -69,6 +79,7 @@ def test_renders_six_minimal_dags(tmp_path, profile):
     assert all((dst / path).is_file() for path in required)
     assert compileall.compile_dir(dst, quiet=1, force=True)
     assert yaml.safe_load((dst / "model.yaml").read_text())["commands"]["supervised"]["predict"]
+    assert "{predicates_path}" in (dst / "model.yaml").read_text()
 
     env = {**os.environ, "PYTHONPATH": str(dst / "src")}
     command_list = subprocess.run(
@@ -101,6 +112,67 @@ def test_implementation_prompt_belongs_to_template_readme_not_rendered_repo(tmp_
     assert "Copyable model-implementation prompt" not in (dst / "README.md").read_text()
 
 
+def test_spec_has_one_template_source_and_renders_to_root(tmp_path):
+    dst = tmp_path / "single-spec"
+    render(dst, "supervised")
+    assert not (TEMPLATE_REPO / "SPEC.md").exists()
+    assert (dst / "SPEC.md").read_text() == (TEMPLATE_REPO / "template" / "SPEC.md").read_text()
+
+
+@pytest.mark.parametrize(
+    ("prediction_rows", "error"),
+    [
+        ([(2, "2020-01-02"), (1, "2020-01-01")], None),
+        ([(1, "2020-01-01")], "missing"),
+        ([(1, "2020-01-01"), (2, "2020-01-02"), (3, "2020-01-03")], "extra"),
+        ([(1, "2020-01-01"), (1, "2020-01-01"), (2, "2020-01-02")], "duplicate"),
+    ],
+)
+def test_prediction_keys_are_compared_directly(tmp_path, prediction_rows, error):
+    import polars as pl
+
+    dst = tmp_path / "key-validation"
+    render(dst, "supervised")
+    integration = load_integration_module(dst)
+    labels = tmp_path / "labels" / "held_out"
+    predictions = tmp_path / "predictions"
+    labels.mkdir(parents=True)
+    predictions.mkdir()
+
+    def frame(rows):
+        return pl.DataFrame(
+            {
+                "subject_id": [row[0] for row in rows],
+                "prediction_time": [row[1] for row in rows],
+            }
+        ).with_columns(pl.col("prediction_time").str.to_datetime())
+
+    frame([(1, "2020-01-01"), (2, "2020-01-02")]).write_parquet(labels / "part.parquet")
+    frame(prediction_rows).write_parquet(predictions / "predictions.parquet")
+    if error is None:
+        integration.assert_prediction_keys(predictions, labels.parent, ["held_out"])
+    else:
+        with pytest.raises(AssertionError, match=error):
+            integration.assert_prediction_keys(predictions, labels.parent, ["held_out"])
+
+
+def test_meds_dev_predicates_capability_is_explicit(tmp_path):
+    dst = tmp_path / "capability"
+    render(dst, "supervised")
+    integration = load_integration_module(dst)
+    checkout = tmp_path / "MEDS-DEV"
+    config = checkout / "src/MEDS_DEV/configs/_run_model.yaml"
+    implementation = checkout / "src/MEDS_DEV/models/__init__.py"
+    config.parent.mkdir(parents=True)
+    implementation.parent.mkdir(parents=True)
+    config.write_text("predicates_path: null\n")
+    implementation.write_text('format_kwargs["predicates_path"] = str(cfg.predicates_path)\n')
+    integration.assert_meds_dev_predicates_capability(checkout)
+    implementation.write_text("format_kwargs = {}\n")
+    with pytest.raises(AssertionError, match="PR #325"):
+        integration.assert_meds_dev_predicates_capability(checkout)
+
+
 def test_measurement_manifest_is_plausible(tmp_path, monkeypatch):
     dst = tmp_path / "measurement"
     render(dst, "packaged")
@@ -125,6 +197,8 @@ def test_measurement_manifest_is_plausible(tmp_path, monkeypatch):
         assert memory["peak_process_tree_pss_bytes"] > 0
         assert memory["includes_descendants"] is True
     assert manifest["resources"]["gpu"]["peak_allocated_bytes"] is None
+    assert "semantics_digest" in manifest
+    assert manifest["semantics_digest"] is None
 
     run_dir = tmp_path / "run"
     result = write_run_result(

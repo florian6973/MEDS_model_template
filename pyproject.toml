@@ -7,7 +7,7 @@ requires-python = ">=3.11"
 dependencies = ["copier>=9"]
 
 [dependency-groups]
-dev = ["pytest>=8", "pyyaml>=6", "ruff"]
+dev = ["polars>=1", "pyarrow>=15", "pytest>=8", "pyyaml>=6", "ruff"]
 
 [tool.uv]
 package = false

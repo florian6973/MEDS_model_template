@@ -90,7 +90,9 @@ Predictions MUST conform to the current MEDS evaluation prediction schema. They 
 row for every requested `(subject_id, prediction_time)` unless an explicitly declared exclusion policy
 permits otherwise. Keys MUST be unique. Row order is not meaningful and MUST never be used to associate
 outputs with keys. Extra output columns are permitted only when documented by the selected task/output
-kind. Coverage counts and exclusions MUST be recorded in the manifest.
+kind. Conformance tests MUST compare actual prediction keys directly with the requested evaluation index;
+self-reported coverage counts are not proof of coverage. Manifests MAY include coverage counts as diagnostic
+metadata. Any exclusion policy MUST identify its excluded keys so tests can validate the resulting index.
 
 ## 6. Measurements
 
@@ -127,6 +129,8 @@ portable pass/fail thresholds.
 - `tests/test_end_to_end.py` MUST execute the rendered repository's real selected DAG and validate final
   prediction keys, schema, manifests, and resource blocks. A stub MAY skip explicitly during initial
   implementation; a completed port MUST have zero stub skips.
+- The model-owned end-to-end adapters MUST identify the labels/evaluation index and evaluated splits so
+  generic tests can compare requested and written prediction keys directly.
 - `slurm/submit.sh --dry-run` MUST print the DAG submission without mutation. `slurm/submit.sh` MUST submit
   the selected DAG with dependencies, per-stage resources, durable results, and no interactive-shell
   dependency.

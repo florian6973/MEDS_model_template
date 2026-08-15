@@ -39,9 +39,11 @@ and the pinned `mortality/in_icu/first_24h` task through MEDS-DEV and reuses its
 Advance in this order. Each automated stage must pass before the next one starts.
 
 1. **Local gate:** run `uv run pytest -rs`. This exercises the contract and the model-owned basic
-   end-to-end adapter on a small synthetic fixture.
+   end-to-end adapter on a small synthetic fixture. Return `E2EResult` from that adapter so the test can
+   compare actual prediction keys with the requested label index and evaluated splits.
 2. **MEDS-DEV gate:** run `uv run pytest -m meds_dev -rs`. This verifies installation and the command
-   strings in `model.yaml` through MEDS-DEV's isolated execution path.
+   strings in `model.yaml` through MEDS-DEV's isolated execution path. Return `MEDSDevRun` from its adapter
+   with the invocation, prediction directory, requested label index, and evaluated splits.
 3. **Pre-demo report and human gate:** complete the source ledger, scientific deviations, input mapping,
    predicate interpretation, the results from the first two gates, and the proposed MIMIC execution plan
    in `IMPLEMENTATION_REPORT.md`. Ask a human to review this evidence and the selected predicates before
