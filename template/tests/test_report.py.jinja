@@ -1,0 +1,11 @@
+from pathlib import Path
+
+from {{ model_slug }}.commands import IS_STUB
+
+
+def test_completed_model_has_a_completed_report():
+    if IS_STUB:
+        return
+    report = (Path(__file__).parents[1] / "IMPLEMENTATION_REPORT.md").read_text()
+    assert "TODO" not in report
+    assert "<paper/repository not yet supplied>" not in report

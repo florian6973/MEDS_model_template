@@ -1,0 +1,32 @@
+"""End-to-end contract test for this rendered repository's real implementation.
+
+Replace ``run_e2e`` in `tests/e2e.py` with fixture preparation and command arguments appropriate to the
+model. A completed port must have no `model_stub` skip.
+"""
+
+from pathlib import Path
+
+import pytest
+
+from meds_model_contract import DAGS, read_manifest
+from {{ model_slug }}.commands import IS_STUB
+
+
+def test_end_to_end(tmp_path: Path):
+    if IS_STUB:
+        pytest.skip("model_stub: implement commands and the repository-specific run_e2e adapter")
+    from .e2e import run_e2e
+
+    artifacts = run_e2e(tmp_path)
+    assert list(artifacts) == [command.value for command in DAGS["{{ profile }}"]]
+    for command, directory in artifacts.items():
+        manifest = read_manifest(directory)
+        assert manifest["command"]["name"] == command
+        resources = manifest["resources"]
+        assert resources["wall_seconds"] >= 0
+        assert resources["memory"]["peak_process_tree_rss_bytes"] > 0
+    prediction_manifest = read_manifest(artifacts["predict"])
+    assert prediction_manifest["artifact"]["type"] == "predictions"
+    coverage = prediction_manifest.get("coverage", {})
+    assert coverage, "predict must record expected/written coverage by evaluated split"
+    assert all(value["n_expected"] == value["n_written"] > 0 for value in coverage.values())

@@ -1,8 +1,0 @@
-# Your model's constructor arguments. `_target_` points at the class in src/{{ model_slug }}/model.py.
-#
-# The stub takes only what the commands inject, so this is nearly empty on purpose: add an entry here for
-# every argument you add there, and override any of them on the command line
-# (`meds-model {% if profile in ['supervised', 'finetune', 'probe'] %}supervised_train{% else %}pretrain{% endif %} model.your_arg=...`).
-_target_: {{ model_slug }}.model.Model
-optimizer: ${optimizer}
-scheduler: null

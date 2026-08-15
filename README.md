@@ -1,185 +1,168 @@
-# MEDS Model Template
+# Minimal MEDS model template
 
-A [Copier](https://copier.readthedocs.io) template for building **standards-conformant
-[MEDS](https://github.com/Medical-Event-Data-Standard/meds) models** that expose a shared five-command
-interface and are directly contributable to
-[MEDS-DEV](https://github.com/Medical-Event-Data-Standard/MEDS-DEV).
+This repository is a self-contained [Copier](https://copier.readthedocs.io) template for minimal,
+contract-first MEDS model repositories.
 
-The template generates the **command DAG, not the model**. `model.py` is a stub whose hooks raise until
-you write them; what you get for free is the interface, the artifact discipline, and a test suite that is
-the specification your model has to satisfy.
+The template fixes the external contract—MEDS input, six command DAGs and standard arguments, typed
+artifact manifests, final MEDS predictions, measurements, MEDS-DEV, SLURM, and GitHub result exchange—while
+leaving preprocessing, featurization, intermediate formats, frameworks, batching, and model execution to
+the generated repository.
 
-Every model generated from this template has the **same usage pattern**:
+## Render a repository
 
-```bash
-pip install .                    # or: uv sync
-meds-model preprocess_data   external_meds_dir=$MEDS_ROOT output_data_dir=runs/data
-meds-model pretrain          input_data_dir=runs/data output_pretrained_model_dir=runs/models/pretrained
-meds-model infer             input_data_dir=runs/data input_pretrained_model_dir=runs/models/pretrained \
-                             external_labels_dir=$LABELS_DIR
-meds-model supervised_train  input_data_dir=runs/data external_labels_dir=$LABELS_DIR \
-                             output_supervised_model_dir=runs/models/supervised
-meds-model predict           input_supervised_model_dir=runs/models/supervised \
-                             external_labels_dir=$LABELS_DIR output_predictions_dir=runs/predictions
-```
-
-A given model supports a *subset* of these; `meds-model commands` prints which. The commands form a **DAG,
-not a fixed pipeline** — see [`docs/design-interface.md`](docs/design-interface.md) for the full specification.
-
-## The five commands
-
-| Command | What it does | Key input | Output |
-|---|---|---|---|
-| `preprocess_data` | external MEDS → model-ready tensors | `external_meds_dir` | `<data_dir>/patients/` |
-| `pretrain` | foundation-model pretraining | patient data | a pretrained model dir |
-| `infer` | materialize reusable outputs | patient data + pretrained model + labels | `<data_dir>/inference/<name>/` |
-| `supervised_train` | task training, optionally on a prior artifact | patient data + `external_labels_dir` | a supervised model dir |
-| `predict` | standardized predictions | `external_labels_dir` + exactly one source | `predictions.parquet` |
-
-`data_dir` is a shared workspace: `patients/` is written once and never modified, and `infer` appends a
-sibling subdirectory. A task is **not** a stage — commands that need one take `external_labels_dir`, which
-is already what MEDS-DEV hands a model. Every artifact carries its own `manifest.yaml` and is published by
-atomic rename, so a directory that exists is a directory that finished. There is no aggregate manifest to
-keep in sync, which is what lets independent jobs materialize different tasks concurrently.
-
-## Three invariants the contract enforces
-
-These exist because each one otherwise produces output that looks correct:
-
-1. **The model never sees ground truth at prediction time.** `boolean_value` is dropped when the index is
-   loaded from `external_labels_dir`, so `batch.boolean_value` is absent and a model cannot read the
-   answer it is about to be scored against. It is joined back onto the output *after* `predict` returns,
-   because `meds-evaluation` scores a predictions file in isolation and requires the column; scoring
-   itself remains a separate, shared tool (`attach_labels=false` opts out).
-2. **Predictions cover the whole index.** A model that can only score part of a task fails rather than
-   writing a short file, and `n_expected` / `n_written` are recorded per split in the manifest.
-3. **A warm start that matches no parameters is an error.** Non-strict checkpoint loading is what makes
-   fine-tuning a fresh head possible; it also silently yields a randomly initialized model when an encoder
-   is renamed. The matched-parameter count is checked and recorded.
-
-Likewise, where a command accepts several alternative sources, supplying two is an error rather than a
-precedence decision, and supplying one the implementation does not handle is an error rather than a
-silently ignored argument.
-
-## Quick start
+From the root of this checkout:
 
 ```bash
 uv tool install copier
-copier copy gh:mmcdermott/MEDS_model_template ./my-model
-cd my-model && uv sync --all-extras
-uv run pytest -m "not slow"
+copier copy . ../my-meds-model
 ```
 
-Or via the bootstrap package:
+For a reproducible non-interactive render:
 
 ```bash
-uv tool install meds-model-template
-meds-model-new ./my-model
+copier copy --defaults --trust \
+  --data model_name="My MEDS Model" \
+  --data model_slug=my_meds_model \
+  --data profile=probe \
+  --data uses_predicates=true \
+  --data implementation_source=https://github.com/example/source-model \
+  . ../my-meds-model
 ```
 
-Pick a **DAG** at generation time — one profile per chain in
-[`docs/design-interface.md`](docs/design-interface.md):
+`--trust` is safe but currently unnecessary because the template defines no post-copy tasks. It is included
+so the command remains usable if formatting/bootstrap tasks are added later.
 
-| Profile | Chain | `predict` consumes | Like |
-|---|---|---|---|
-| `supervised` | `preprocess_data` → `supervised_train` → `predict` | supervised model | a classic task classifier |
-| `finetune` | + `pretrain`, then fine-tune | supervised model | MOTOR |
-| `probe` | + `pretrain`, `infer` embeddings, head on frozen features | supervised model (the head) | linear probing |
-| `zero_shot_direct` | `pretrain` → `predict` straight from the model | pretrained model | EveryQuery |
-| `zero_shot_materialized` | `pretrain` → `infer` scores → `predict` from them | inference artifacts | MEDS-EIC-AR |
-| `packaged` | `preprocess_data` → `predict` | nothing (weights ship with the repo) | PFN-style |
+### Copier questions
 
-A profile is a **shape, not a model**. Every generated repository ships all five commands; the profile
-decides which are registered and how their artifacts connect. The render tests assert each one is a
-*runnable* DAG: everything a command requires is produced by another command in the chain, and nothing
-produced is left unconsumed.
+| Question | Meaning |
+|---|---|
+| `model_name` | Human-readable model name. |
+| `model_slug` | Importable Python package and MEDS-DEV model identifier. |
+| `profile` | One of the six supported command DAGs. |
+| `model_description` | Short description rendered into README and `model.yaml`. |
+| `author_name`, `author_email` | MEDS-DEV contact metadata. |
+| `uses_predicates` | Whether generated MEDS-DEV commands pass `external_predicates_file`. The model still owns interpretation. |
+| `implementation_source` | Paper path/URL, source repository path/URL, or both; prefilled into generated guidance and the report. |
 
-Pick a **data backend** too — an orthogonal, representation-level choice
-([`docs/design-featurization.md`](docs/design-featurization.md)):
+Profiles are `supervised`, `finetune`, `probe`, `zero_shot_direct`, `zero_shot_materialized`, and
+`packaged`. They select command topology, not an architecture or execution backend.
 
-| `data_backend` | `preprocess_data` produces | The model sees | For |
-|---|---|---|---|
-| `mtd` (default) | meds-torch-data tensorization | the dataset's code vocabulary | sequence / foundation models |
-| `custom_featurization` | MEDS parquet + one 0/1 `predicate//<name>` column per predicate in your `predicates.yaml` | the concepts you declared | models built on **named clinical variables** |
+## Work in the generated repository
 
-Under `custom_featurization` the datamodule is yours to write (against the protocol in
-`meds_model_base/lightning/protocol.py`), meds-torch-data is not installed, and aggregation, imputation
-and derived variables live in your code — which is the point: predicates supply the base quantities, the
-datamodule composes them.
+```bash
+cd ../my-meds-model
+uv sync --extra test
+uv run meds-model commands
+uv run pytest -rs
+```
 
-## What you get
+The generated commands are intentional stubs. Before implementation, the local, MEDS-DEV, and MIMIC
+end-to-end tests report explicit `model_stub` skips. Start with these rendered files:
 
-- **`src/<your_model>/model.py`** — **a stub.** The hooks your DAG calls, documented, each raising
-  `NotImplementedError`. This is the part the template deliberately does not write for you.
-- **`src/meds_model_base/`** — the *vendored, template-managed* contract: command ABCs, source
-  arbitration, the `meds-model` dispatcher, the manifest layer, default command implementations
-  (MEDS-transforms + meds-torch-data + Lightning + ACES + meds-evaluation), schema validators, and a small
-  MEDS-batch adapter layer. `copier update` re-renders it. **It contains no models.**
-- **Hydra configs** (one root per command, plus a shared `paths` group), **CI**, **pre-commit**, a
-  **`model.yaml`/`requirements.txt`** for MEDS-DEV, and a **conformance test suite**: CLI and workspace
-  tests that run immediately, plus end-to-end and designed-signal learnability tests that skip while
-  `model.py` is a stub and start running the moment you implement it.
-- **`CLAUDE.md` and `docs/PORTING-A-MODEL.md`** — written for a coding agent working in the generated
-  repo: which files it owns, which `copier update` overwrites, the contract rules that look like details
-  and are not, and — if it is reimplementing a published model — the required ledger of what was ported,
-  adapted, or omitted.
+1. `AGENTS.md`
+2. `SPEC.md`
+3. `README.md`
+4. `docs/IMPLEMENTATION_GUIDE.md`
+5. `src/<model_slug>/commands.py`
+6. `tests/e2e.py`
+7. `IMPLEMENTATION_REPORT.md`
 
-## Porting a published model with a coding agent
+A completed implementation sets `IS_STUB = False` only after its actual DAG works.
 
-The agent-facing docs (`CLAUDE.md`, `docs/PORTING-A-MODEL.md`) render into every generated repository
-because that is where a port actually happens — but an agent only reads them if the task sends it there.
-This prompt does that, and closes the gaps a port otherwise falls into: choosing a backend by default
-rather than by argument, "the tests pass" reported from a run that skipped the tests that matter, and
-elements quietly dropped because they were awkward for the fixture.
+## Copyable model-implementation prompt
+
+Use this after rendering a repository. Replace both placeholders before sending it to a coding agent.
 
 ```text
-Based on models/cards/<model>/<model>.md, create an implementation of this model under
-models/<model>, generated from https://github.com/florian6973/MEDS_model_template.
+Based on the following source:
 
-Read the rendered CLAUDE.md and docs/PORTING-A-MODEL.md in full before writing any code, and
-follow that procedure. Choose the profile and the data_backend that fit this model, and justify
-both in the report — do not take the defaults by omission.
+<PAPER_PATH_OR_URL_AND_OR_REPOSITORY_PATH_OR_URL>
 
-Perform the most faithful implementation possible, even if it requires more work. Do not drop a
-source element because it is awkward for the test fixture: fix the fixture. Every element of the
-source ends up in the ledger as ported, adapted or omitted, each with evidence.
+implement the model in the generated MEDS model repository at:
 
-Then run the tests and report the numbers, not adjectives:
-    uv run pytest -rs                                  # -rs, and no -m filter: the slow
-                                                       # designed-signal tests are the point
-    MEDS_DEV_DIR=<a MEDS-DEV checkout> uv run pytest -m meds_dev -rs
-There must be zero skip_if_stub skips. State the pass/skip counts and account for every skip
-that remains.
+<GENERATED_REPOSITORY_PATH>
 
-Finally write IMPLEMENTATION_REPORT.md exactly as Step 5 of docs/PORTING-A-MODEL.md specifies.
+Read AGENTS.md, SPEC.md, README.md, and docs/IMPLEMENTATION_GUIDE.md in the generated repository
+completely before writing code. Inspect the paper, supplementary material, source repository,
+configuration files, checkpoints, preprocessing code, and evaluation code available from the supplied
+source.
+
+Preserve the selected command DAG and standardized command arguments, MEDS input boundary, artifact
+manifest envelopes, MEDS-DEV model.yaml interface, and final MEDS prediction output. Intermediate payload
+formats and execution mechanisms are model-owned: choose whatever preprocessing, featurization, framework,
+batching or non-batching strategy, external executable, storage format, and model architecture most
+faithfully reproduce the source.
+
+Reuse MEDS-DEV dataset predicates when needed, but decide within the model how those predicates become
+inputs. Do not introduce a generic predicate-derived feature representation into the contract package.
+Do not omit source behavior because it is inconvenient for a fixture; adapt the implementation or fixture
+instead.
+
+Record every material source element as ported, adapted, or omitted, with evidence and justification, in
+IMPLEMENTATION_REPORT.md. Implement every registered command, finalize the implementation-specific
+command strings in model.yaml, and implement tests/e2e.py. Keep IS_STUB = True until the actual selected
+DAG completes and produces standards-conformant predictions.
+
+Then run:
+
+    uv run pytest -rs
+    uv run pytest -m meds_dev -rs
+    uv run pytest -m real_data -rs
+
+There must be zero model_stub skips. Report exact pass/skip counts and account for every remaining skip.
+Complete IMPLEMENTATION_REPORT.md with exact source revisions, commands executed, final-output coverage,
+predicate provenance, environment, wall time, peak process-tree PSS/RSS, GPU measurements when available,
+scientific deviations, and known limitations.
 ```
 
-For a `custom_featurization` port, the report's required-concepts table is the part to check first: the
-match counts come from the patients artifact's `manifest.yaml`, and a base concept with **zero** matched
-events means a broken binding, not a variable to shrug at.
-
-## Configuration
-
-Every command is a Hydra application reading a packaged `configs/` tree, so anything is overridable on the
-command line (`meds-model supervised_train trainer.max_epochs=50 model.d_model=256`) or via config files.
-Shared locations live in one `paths/default.yaml`; each command has its own root config named after it.
-
-## Updating a generated repo
+## Test tiers in a generated repository
 
 ```bash
-cd my-model
-copier update            # 3-way merge: pulls the new contract into src/meds_model_base/, keeps your model
+uv run pytest -rs
+uv run pytest -m meds_dev -rs
+uv run pytest -m real_data -rs
 ```
 
-## Docs
+- The default suite checks the contract and model-owned local end-to-end adapter.
+- `meds_dev` registers `model.yaml` and runs it in MEDS-DEV's isolated environment.
+- `real_data` builds or reuses the MEDS MIMIC-IV demo, extracts MEDS-DEV task
+  `mortality/in_icu/first_24h`, reuses MEDS-DEV's MIMIC predicates, and runs the full selected DAG.
 
-- [`docs/design-interface.md`](docs/design-interface.md) — the authoritative command and artifact specification.
-- [`docs/DESIGN.md`](docs/DESIGN.md) — background on the MEDS-ecosystem APIs this is built on. Note that
-  its command vocabulary predates `docs/design-interface.md`.
-- [`template/docs/PORTING-A-MODEL.md.jinja`](template/docs/PORTING-A-MODEL.md.jinja) — the procedure for
-  reimplementing a published model, and the implementation report it requires. It lives in the payload
-  because it is only useful where the port happens: it renders into every generated repo as `docs/`.
+Set `MEDS_DEV_DIR=/path/to/MEDS-DEV` to reuse a checkout and `MEDS_DEMO_DIR=/path/to/demo` to reuse the
+dataset. A bare test run never clones MEDS-DEV or downloads MIMIC data.
 
-## License
+## Cluster and result interfaces
 
-MIT
+```bash
+$EDITOR slurm/config.sh
+./slurm/submit.sh --dry-run
+./slurm/submit.sh
+scripts/github-sync.sh <run-id>
+```
+
+Each command manifest records wall time and sampled process-tree PSS/RSS. Structured run evidence is kept
+under `runs/<run-id>/`. GitHub synchronization publishes a run branch; it does not commit datasets,
+checkpoints, credentials, or raw logs.
+
+## Develop the Copier template
+
+From the parent repository root:
+
+```bash
+uv sync --group dev
+uv run pytest tests/test_render.py -q
+uv run pytest tests/ -q
+uv run ruff check tests/test_render.py
+uv run ruff format --check tests/test_render.py
+```
+
+`tests/test_render.py` renders all six DAGs, compiles the generated repositories, validates command
+registries and operational files, tests measurement manifests and run results, and exercises MEDS-DEV
+registration. To test the rendered repository itself, render it into a temporary directory and run:
+
+```bash
+uv run --project /tmp/my-render --extra test pytest /tmp/my-render/tests -q -rs
+```
+
+The authority is [`SPEC.md`](SPEC.md). Files under `template/` are the generated payload; root tests
+validate that payload without imposing a model implementation.

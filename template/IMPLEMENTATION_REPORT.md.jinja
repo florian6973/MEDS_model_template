@@ -1,0 +1,57 @@
+# Implementation report: {{ model_name }}
+
+## Source
+
+- Paper/repository: {{ implementation_source if implementation_source else 'TODO' }}
+- Exact revision/version: TODO
+
+## DAG choice
+
+- Selected DAG: `{{ profile }}`
+- Justification: TODO
+
+## Source-element ledger
+
+| Source element | Status: ported/adapted/omitted | Implementation evidence | Justification/deviation |
+|---|---|---|---|
+| TODO | TODO | TODO | TODO |
+
+## Inputs and predicates
+
+- MEDS assumptions: TODO
+- Required predicate names: TODO
+- Predicate interpretation and derived features: TODO
+
+## Intermediate artifacts
+
+| Command | Payload format/version | Compatibility check | Inputs/provenance |
+|---|---|---|---|
+| TODO | TODO | TODO | TODO |
+
+## Scientific deviations
+
+TODO
+
+## Verification
+
+| Suite/run | Exact command | Pass/skip counts | Coverage/result |
+|---|---|---|---|
+| Local | `uv run pytest -rs` | TODO | TODO |
+| MEDS-DEV | `uv run pytest -m meds_dev -rs` | TODO | TODO |
+| MIMIC-IV demo | `uv run pytest -m real_data -rs` | TODO | TODO |
+
+## Resource measurements
+
+| Environment/command | Wall seconds | Peak tree PSS bytes | Peak tree RSS bytes | GPU bytes |
+|---|---:|---:|---:|---:|
+| TODO | TODO | TODO | TODO | TODO |
+
+## Environment and provenance
+
+- Model commit and dirty state: TODO
+- Dataset/task identifiers: TODO
+- Dependency/platform/hardware summary: TODO
+
+## Known limitations
+
+TODO

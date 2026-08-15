@@ -1,0 +1,15 @@
+# Agent instructions
+
+Before editing, read `SPEC.md`, `README.md`, and `docs/IMPLEMENTATION_GUIDE.md` completely.
+
+- `src/meds_model_contract/` is the backend-neutral contract. Do not add framework, batching,
+  preprocessing-format, or model assumptions there.
+- `src/{{ model_slug }}/`, `model.yaml`, command configuration, and `tests/e2e.py` are model-owned.
+- Preserve the `{{ profile }}` DAG and established command argument names.
+- Intermediate payloads are opaque. Generic tests validate their envelopes, not their contents.
+- MEDS-DEV owns dataset-specific predicates; the model owns their interpretation.
+- Never associate outputs with prediction keys by row order.
+- Keep `IS_STUB = True` until every registered command and the real end-to-end adapter work.
+- Run pytest with `-rs`, account for every skip, and require zero `model_stub` skips before completion.
+- Report exact source revisions, commands, coverage, and measurements in `IMPLEMENTATION_REPORT.md`.
+- Do not commit datasets, checkpoints, credentials, or raw cluster logs.

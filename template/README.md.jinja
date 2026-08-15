@@ -2,203 +2,90 @@
 
 {{ model_description }}
 
-A MEDS model generated from [MEDS_model_template](https://github.com/mmcdermott/MEDS_model_template)
-(`{{ profile }}` profile). It exposes the standard `meds-model` command interface and is contributable to
-[MEDS-DEV](https://github.com/Medical-Event-Data-Standard/MEDS-DEV).
+This repository implements the **`{{ profile }}`** DAG under version 2 of the minimal MEDS model
+contract. The contract standardizes MEDS input, command meanings and arguments, artifact envelopes,
+final predictions, measurements, MEDS-DEV packaging, and operational interfaces. The model owns every
+computational choice and every intermediate payload.
 
-## Install
+## Command graph
 
-```bash
-uv sync --all-extras
+```text
+{% if profile == 'supervised' %}preprocess_data -> supervised_train -> predict{% elif profile == 'finetune' %}preprocess_data -> pretrain -> supervised_train -> predict{% elif profile == 'probe' %}preprocess_data -> pretrain -> infer -> supervised_train -> predict{% elif profile == 'zero_shot_direct' %}preprocess_data -> pretrain -> predict{% elif profile == 'zero_shot_materialized' %}preprocess_data -> pretrain -> infer -> predict{% else %}preprocess_data -> predict{% endif %}
 ```
 
-## The command graph
-
-Five commands form a DAG, not a fixed pipeline. Run `meds-model commands` to see which this model supports.
-
-| Command | Reads | Writes |
-|---|---|---|
-| `preprocess_data` | an external MEDS dataset, sharded by split | `<data_dir>/patients/` |
-| `pretrain` | patient data | a pretrained model directory |
-| `infer` | patient data + a pretrained model + `external_labels_dir` | `<data_dir>/inference/<name>/` |
-| `supervised_train` | patient data + `external_labels_dir` (+ at most one prior artifact) | a supervised model directory |
-| `predict` | `external_labels_dir` + exactly one source | `predictions.parquet` |
-
-`data_dir` is a shared workspace: `patients/` is written once and never modified, and `infer` appends a
-sibling subdirectory. Every artifact directory carries a `manifest.yaml` recording
-what produced it and from which inputs, and is published atomically — so a directory that exists is a
-directory that finished.
-
-### The input dataset must be sharded by split
-
-`external_meds_dir` must look like `data/train/…`, `data/tuning/…`, `data/held_out/…`. That is what
-`meds-dev-dataset` and the standard MEDS ETL produce, so a dataset from MEDS-DEV needs no preparation.
-Anything else is refused up front, with the resharding pipeline to run printed in the error.
-
-The reason is that meds-torch-data reads split membership from the shard path and nothing else, so this
-layout is the only one it can tensorize into an artifact that still knows its splits. It is also why
-`patients/` carries no `subject_splits.parquet`: split membership travels as the shard layout, and a
-second copy could only ever disagree with it.
-
-That matters if you use `pipeline=`. A MEDS-transforms pipeline that filters subjects — `filter_subjects`,
-or a `filter_measurements` aggressive enough to empty a timeline — tokenizes them away, and their labels
-are then dropped to match. `preprocess_data` warns and records `dropped_by_pipeline` in the manifest when
-it happens. **Your evaluation then covers fewer subjects than the task defines, and nothing downstream can
-tell**: `meds-dev-evaluation` only ever sees the predictions file. If you are comparing numbers against
-another model, that difference belongs in your write-up.
-
-## Usage
-
 ```bash
-{% if profile == 'supervised' %}meds-model preprocess_data  external_meds_dir=$MEDS_ROOT output_data_dir=runs/data
-meds-model supervised_train input_data_dir=runs/data external_labels_dir=$LABELS_DIR output_supervised_model_dir=runs/models/supervised
-meds-model predict          input_data_dir=runs/data external_labels_dir=$LABELS_DIR input_supervised_model_dir=runs/models/supervised \
-                            output_predictions_dir=runs/predictions
-{% elif profile == 'finetune' %}meds-model preprocess_data  external_meds_dir=$MEDS_ROOT output_data_dir=runs/data
-meds-model pretrain         input_data_dir=runs/data output_pretrained_model_dir=runs/models/pretrained
-meds-model supervised_train input_data_dir=runs/data external_labels_dir=$LABELS_DIR input_pretrained_model_dir=runs/models/pretrained \
-                            output_supervised_model_dir=runs/models/supervised
-meds-model predict          input_data_dir=runs/data external_labels_dir=$LABELS_DIR input_supervised_model_dir=runs/models/supervised \
-                            output_predictions_dir=runs/predictions
-{% elif profile == 'probe' %}meds-model preprocess_data  external_meds_dir=$MEDS_ROOT output_data_dir=runs/data
-meds-model pretrain         input_data_dir=runs/data output_pretrained_model_dir=runs/models/pretrained
-meds-model infer            input_data_dir=runs/data external_labels_dir=$LABELS_DIR input_pretrained_model_dir=runs/models/pretrained
-meds-model supervised_train input_data_dir=runs/data external_labels_dir=$LABELS_DIR input_inference_subdir=inference/embeddings \
-                            output_supervised_model_dir=runs/models/supervised
-meds-model predict          input_data_dir=runs/data external_labels_dir=$LABELS_DIR input_supervised_model_dir=runs/models/supervised \
-                            output_predictions_dir=runs/predictions
-{% elif profile == 'zero_shot_direct' %}meds-model preprocess_data external_meds_dir=$MEDS_ROOT output_data_dir=runs/data
-meds-model pretrain        input_data_dir=runs/data output_pretrained_model_dir=runs/models/pretrained
-meds-model predict         input_data_dir=runs/data external_labels_dir=$LABELS_DIR input_pretrained_model_dir=runs/models/pretrained \
-                           output_predictions_dir=runs/predictions
-{% elif profile == 'zero_shot_materialized' %}meds-model preprocess_data external_meds_dir=$MEDS_ROOT output_data_dir=runs/data
-meds-model pretrain        input_data_dir=runs/data output_pretrained_model_dir=runs/models/pretrained
-meds-model infer           input_data_dir=runs/data external_labels_dir=$LABELS_DIR input_pretrained_model_dir=runs/models/pretrained
-meds-model predict         input_data_dir=runs/data external_labels_dir=$LABELS_DIR input_inference_subdir=inference/embeddings \
-                           output_predictions_dir=runs/predictions
-{% elif profile == 'packaged' %}meds-model preprocess_data external_meds_dir=$MEDS_ROOT output_data_dir=runs/data
-meds-model predict         input_data_dir=runs/data external_labels_dir=$LABELS_DIR output_predictions_dir=runs/predictions
-{% else %}meds-model preprocess_data external_meds_dir=$MEDS_ROOT output_data_dir=runs/data
-# ... then the commands listed by `meds-model commands`
-{% endif %}```
-
-Any extra argument is a Hydra override, e.g.
-`meds-model supervised_train trainer.max_epochs=50 model.d_model=128`.
-
-### Logging
-
-`pretrain` and `supervised_train` take a `logger` config group; `configs/logger/<name>.yaml` is what makes
-`logger=<name>` valid, so **use these configs rather than constructing a logger in `model.py`** — a logger
-built there is invisible to `logger=`, and a name with no file is a Hydra composition error.
-{% if use_wandb or use_mlflow %}
-This repository ships {% if use_wandb and use_mlflow %}three{% else %}two{% endif %}:
-
-| `logger=` | Writes to | Needs |
-|---|---|---|
-| `csv` (default) | `${log_dir}/logs` | nothing |
-{% if use_wandb %}| `wandb` | the `{{ model_slug }}` W&B project | `uv sync --extra wandb`, then `wandb login` (or `WANDB_API_KEY`) |
-{% endif %}{% if use_mlflow %}| `mlflow` | `${log_dir}/mlflow/mlruns` | `uv sync --extra mlflow` |
-{% endif %}
-```bash
-{% if use_wandb %}meds-model pretrain logger=wandb logger.wandb.project=my-project
-{% else %}meds-model pretrain logger=mlflow logger.mlflow.experiment_name=my-experiment
-{% endif %}```
-
-`uv sync --all-extras` (the install step above) installs all of them at once.
-{% else %}
-Only `csv` is rendered here, because `use_wandb` and `use_mlflow` were both answered no. To add one, copy
-a config into `configs/logger/` and add its package to `[project.optional-dependencies]` — or re-render
-with `copier update` after flipping the answer in `.copier-answers.yml`.
-{% endif %}
-A logger group member is a mapping of *name → logger config*: `build_trainer` instantiates every
-`_target_` child of `cfg.logger`, so one file can enable several loggers at once, and a file with a bare
-top-level `_target_` enables none of them without failing.
-
-### Reproducibility
-
-`pretrain` and `supervised_train` seed with `seed_everything(seed, workers=True)` (`seed: 0`; `null` skips
-seeding entirely), `num_workers` defaults to `0`, and the Trainer ships `deterministic: warn` and
-`benchmark: false`. What that buys is worth stating exactly, because it is less than "reproducible":
-
-> **same seed + same config + same environment → same metric.**
-
-Changing `num_workers` or `batch_size` alters RNG consumption order and legitimately changes results, and
-reproducibility across different hardware or library versions is not reachable at all.
-
-```bash
-meds-model supervised_train trainer.deterministic=true   # raise instead of warn on a non-deterministic op
-meds-model supervised_train trainer.precision=bf16-mixed # trade precision for speed
+meds-model commands
+meds-model <command> key=value ...
 ```
 
-`CUBLAS_WORKSPACE_CONFIG=:4096:8` is set for you — without it `deterministic=true` raises on CUDA at the
-first matmul rather than at startup. Float32 matmul precision is left at torch's default (`highest`); this
-repository does not quietly run fp32 matmuls in bfloat16 to buy speed. If you need that, `precision` above
-is the better lever, and a model port that requires TF32 specifically should set it in `model.py` and
-record it.
+Intermediate artifacts may be tensors, files, databases, external-system references, or any other
+implementation-owned representation. Generic tests inspect only their `manifest.yaml` envelopes. They
+must not assume batches, Lightning, PyTorch, Parquet intermediate data, or iteration order.
 
-### Two rules worth knowing
+## Inputs and predicates
 
-**Sources are alternatives, not layers.** `supervised_train` and `predict` each accept several optional
-input artifacts. Supplying more than one is an error rather than a precedence decision, and supplying one
-the model does not handle is an error rather than a silently ignored argument.
+- `external_meds_dir` is the standard MEDS dataset boundary.
+- `external_labels_dir` supplies task prediction times and training labels where the DAG needs them.
+- `external_predicates_file` supplies dataset-specific predicates when useful. For MIMIC-IV, reuse the
+  predicates from MEDS-DEV. This repository decides whether and how to interpret them.
 
-**Predictions cover the whole index.** `predict` writes one row per task timepoint in the selected splits,
-or fails. A short predictions file is indistinguishable downstream from a complete one, so it is never
-written. Restrict the request with `splits=[held_out]` instead.
+A command that consumes predicates records their absolute path and SHA-256 digest in its manifest.
+Predicates do not imply a standard feature representation.
 
-`predict` emits `predictions.parquet` in the
-[meds-evaluation](https://github.com/kamilest/meds-evaluation) `PredictionSchema`
-(`subject_id, prediction_time, predicted_boolean_probability`). **This repository ends at predicted
-probabilities — it never reads ground-truth labels, and evaluation is a separate, shared tool.**
+## Implementing the model
 
-## Editing
+Read [AGENTS.md](AGENTS.md), [SPEC.md](SPEC.md), and
+[docs/IMPLEMENTATION_GUIDE.md](docs/IMPLEMENTATION_GUIDE.md) completely before changing implementation
+files. The implementation source recorded when this repository was generated is:
 
-**Start here: `src/{{ model_slug }}/model.py` is a stub.** The template generated the command DAG, not the
-model — every hook in it raises `NotImplementedError` until you write it, and the docstring lists exactly
-which hooks this DAG calls. Delete the `is_stub` marker when you are done.
-
-{% if profile in ['zero_shot_direct', 'packaged'] %}- **`src/{{ model_slug }}/predict.py`** — also a stub: how this model answers a task.
-{% endif %}- **`src/{{ model_slug }}/commands.py`** — which commands this model supports.
-- **`src/{{ model_slug }}/configs/`** — `model/` constructor arguments, `paths/` locations, `profile/` the DAG.
-- **`src/meds_model_base/`** — the vendored contract (managed by `copier update`; don't edit). It holds
-  the command graph, manifests, schemas and a small MEDS-batch adapter layer — no models.
-
-## Testing
-
-```bash
-uv run pytest -m "not slow"    # CLI smoke + the end-to-end conformance test
-uv run pytest -m slow          # designed-signal learnability, with a negative control
+```text
+{{ implementation_source if implementation_source else 'Not supplied during generation.' }}
 ```
 
-The tests that need a working model **skip while `model.py` is a stub**, naming what to implement. They are
-not scaffolding to delete — they are the contract your model has to satisfy, and they start running the
-moment you remove the `is_stub` marker. A fresh repository is therefore green but honest: the CLI, config
-composition and dispatcher are genuinely tested; the model is not yet there to test.
+The model-owned surface is `src/{{ model_slug }}/commands.py`, command configuration, `model.yaml`, and
+`tests/e2e.py`. Implement every registered command, define exact intermediate compatibility checks,
+finalize MEDS-DEV command strings, and complete the report. Keep `IS_STUB = True` until the actual DAG
+runs end to end.
 
-## Contributing to MEDS-DEV
-
-`model.yaml` in this repository is the MEDS-DEV specification for this model's DAG. MEDS-DEV does not read
-it from here — it discovers models with `importlib.resources.files("MEDS_DEV.models").rglob("*/model.yaml")`,
-so a model is registered only by living inside the *installed* `MEDS_DEV` package. Fork MEDS-DEV, clone it,
-install it editable (`pip install -e '.[dev,tests]'` — the PyPI distribution cannot be contributed to), then:
+## Verification
 
 ```bash
-meds-model-add-to-meds-dev --meds-dev ~/MEDS-DEV --dry-run   # print the plan
-meds-model-add-to-meds-dev --meds-dev ~/MEDS-DEV             # write it
+uv run pytest -rs
+uv run pytest -m meds_dev -rs
+uv run pytest -m real_data -rs
 ```
 
-This copies `model.yaml` verbatim, writes a `README.md` stub (MEDS-DEV requires one), and **rewrites**
-`requirements.txt` — the one part that is not a copy. MEDS-DEV builds an isolated venv and runs
-`uv pip install -r <file>` from its own working directory, so a local checkout must be referenced by
-absolute path; the default writes `-e {{ '{' }}this repo{{ '}' }}`. Once the model is installable by URL,
-edit this repository's `requirements.txt` (replace `YOUR_ORG`, or pin a release) and pass `--published` to
-use it as-is.
+- The default suite runs the local end-to-end adapter and contract tests.
+- `meds_dev` registers `model.yaml`, installs this repository from `requirements.txt` in an isolated
+  environment, and executes MEDS-DEV's real command slots.
+- `real_data` runs the full selected DAG on the MEDS-DEV MIMIC-IV demo, the pinned
+  `mortality/in_icu/first_24h` task, and MEDS-DEV's
+  MIMIC predicates. Set `MEDS_DEMO_DIR` to reuse an existing demo and `MEDS_DEV_DIR` to reuse a checkout.
 
-The helper refuses to write if it finds `MEDS_DEV` importable from somewhere other than the checkout you
-named — that is the non-editable install case, where the files would land somewhere nothing imports.
+Both integration tiers explicitly `model_stub`-skip until implementation is complete. A completed port
+must have zero `model_stub` skips and must account for every other skip using `-rs` output.
 
-## Updating the template
+Final predictions must conform to MEDS evaluation, contain unique `(subject_id, prediction_time)` keys,
+and exactly cover the requested evaluation index. Row order is never an association mechanism.
+
+## Measurements
+
+Every command manifest records monotonic wall time and sampled live process-tree memory. On Linux, peak
+PSS from `/proc/*/smaps_rollup` is the primary comparison metric; aggregate RSS is retained as a
+diagnostic. The measurement method and sampling interval are explicit. GPU measurements and SLURM
+`MaxRSS`, when available, are separate metrics. Missing measurements are `null`; observed zero is `0`.
+Time and memory are evidence, not portable test thresholds.
+
+## Cluster execution and GitHub communication
 
 ```bash
-copier update
+$EDITOR slurm/config.sh
+./slurm/submit.sh --dry-run
+./slurm/submit.sh
+scripts/github-sync.sh <run-id>
 ```
+
+SLURM follows the selected DAG and chains stages by successful dependencies. Structured evidence belongs
+under `runs/<run-id>/`; raw logs, datasets, checkpoints, and credentials do not. GitHub synchronization
+pushes a `runs/{{ model_slug }}/<run-id>` branch and optionally opens a draft PR. A failed push leaves the
+result committed and recoverable locally.
