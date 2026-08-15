@@ -65,6 +65,12 @@ uv run pytest -m real_data -rs
 Both integration tiers explicitly `model_stub`-skip until implementation is complete. A completed port
 must have zero `model_stub` skips and must account for every other skip using `-rs` output.
 
+These commands are gates, not an unordered checklist. Follow the canonical staged workflow in
+[docs/IMPLEMENTATION_GUIDE.md](docs/IMPLEMENTATION_GUIDE.md): local, MEDS-DEV, pre-demo report and human
+review, MIMIC-IV demo, demo report and human review, authorized full MIMIC-IV, then final report and GitHub
+synchronization. Full-data cluster jobs run only from a clean, pushed commit and use the reviewed shared
+`work/` task bundle produced by `meds-task-selection`.
+
 Final predictions must conform to MEDS evaluation, contain unique `(subject_id, prediction_time)` keys,
 and exactly cover the requested evaluation index. Row order is never an association mechanism.
 

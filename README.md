@@ -82,6 +82,10 @@ implement the model in the generated MEDS model repository at:
 
 <GENERATED_REPOSITORY_PATH>
 
+For the full MIMIC-IV run, use this shared task bundle if already available:
+
+<FULL_MIMIC_WORK_DIR_OR_NOT_YET_AVAILABLE>
+
 Read AGENTS.md, SPEC.md, README.md, and docs/IMPLEMENTATION_GUIDE.md in the generated repository
 completely before writing code. Inspect the paper, supplementary material, source repository,
 configuration files, checkpoints, preprocessing code, and evaluation code available from the supplied
@@ -107,12 +111,23 @@ Then run:
 
     uv run pytest -rs
     uv run pytest -m meds_dev -rs
+
+Complete the pre-demo sections of IMPLEMENTATION_REPORT.md and ask for human review of source fidelity,
+predicate interpretation, and the proposed MIMIC execution. Only after approval, run:
+
     uv run pytest -m real_data -rs
 
 There must be zero model_stub skips. Report exact pass/skip counts and account for every remaining skip.
-Complete IMPLEMENTATION_REPORT.md with exact source revisions, commands executed, final-output coverage,
-predicate provenance, environment, wall time, peak process-tree PSS/RSS, GPU measurements when available,
-scientific deviations, and known limitations.
+Update IMPLEMENTATION_REPORT.md with the demo cohort, final-output coverage, predicate provenance,
+environment, wall time, peak process-tree PSS/RSS, GPU measurements when available, failures, and fixes.
+Ask for a second human review before launching the full MIMIC-IV dataset through the repository's SLURM
+interface. Use the approved shared `work/` bundle produced by
+https://github.com/florian6973/meds-task-selection; it must contain `tasks.yaml` and the generated task
+inputs/labels. Record the bundle location, task-selection source commit, and `tasks.yaml` SHA-256. Keep the
+bundle external to Git. Commit and push the implementation, configuration, and report-so-far; run the
+cluster job from that exact clean commit. After the authorized run, complete the report with full-data evidence, scientific
+deviations, and known limitations, then synchronize structured results through the GitHub workflow. Treat
+docs/IMPLEMENTATION_GUIDE.md as the authority for the ordered gates and their evidence.
 ```
 
 ## Test tiers in a generated repository
@@ -127,6 +142,12 @@ uv run pytest -m real_data -rs
 - `meds_dev` registers `model.yaml` and runs it in MEDS-DEV's isolated environment.
 - `real_data` builds or reuses the MEDS MIMIC-IV demo, extracts MEDS-DEV task
   `mortality/in_icu/first_24h`, reuses MEDS-DEV's MIMIC predicates, and runs the full selected DAG.
+
+The implementation guide defines what follows these commands: a report/review gate after the demo, then
+an explicitly authorized full MIMIC-IV run and final report. The demo's required task is ICU mortality;
+additional MEDS-DEV MIMIC-supported tasks are optional coverage checks, not a mandatory task benchmark.
+The full-data evaluation instead uses the separately reviewed, shared ten-task `work/` bundle generated
+by `meds-task-selection` so all model repositories evaluate the same task definitions and labels.
 
 Set `MEDS_DEV_DIR=/path/to/MEDS-DEV` to reuse a checkout and `MEDS_DEMO_DIR=/path/to/demo` to reuse the
 dataset. A bare test run never clones MEDS-DEV or downloads MIMIC data.
