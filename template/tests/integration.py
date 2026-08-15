@@ -105,7 +105,7 @@ def provision_meds_dev(request, tmp_path_factory) -> Path:
     run([git, "clone", source or MEDS_DEV_URL, checkout], timeout=INSTALL_TIMEOUT)
     if source is None:
         ref = os.environ.get("MEDS_DEV_REF", MEDS_DEV_PREDICATES_REF)
-        run([git, "checkout", "--detach", ref], timeout=INSTALL_TIMEOUT, env=None)
+        run([git, "-C", checkout, "checkout", "--detach", ref], timeout=INSTALL_TIMEOUT)
     assert_meds_dev_predicates_capability(checkout)
     run([uv, "venv", checkout / ".venv"], timeout=INSTALL_TIMEOUT)
     run(

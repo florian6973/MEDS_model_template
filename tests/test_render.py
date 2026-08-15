@@ -173,6 +173,56 @@ def test_meds_dev_predicates_capability_is_explicit(tmp_path):
         integration.assert_meds_dev_predicates_capability(checkout)
 
 
+def test_meds_dev_ref_is_checked_out_in_clone(tmp_path, monkeypatch):
+    dst = tmp_path / "provisioning"
+    render(dst, "supervised")
+    integration = load_integration_module(dst)
+    commands = []
+
+    class Request:
+        class Config:
+            @staticmethod
+            def getoption(name, default=""):
+                assert name == "markexpr"
+                return "meds_dev"
+
+        config = Config()
+
+    class TempPathFactory:
+        @staticmethod
+        def mktemp(name):
+            assert name == "meds-dev"
+            path = tmp_path / name
+            path.mkdir()
+            return path
+
+    def fake_run(command, **kwargs):
+        command = [str(value) for value in command]
+        commands.append(command)
+        if command[1] == "clone":
+            checkout = Path(command[-1])
+            config = checkout / "src/MEDS_DEV/configs/_run_model.yaml"
+            implementation = checkout / "src/MEDS_DEV/models/__init__.py"
+            config.parent.mkdir(parents=True)
+            implementation.parent.mkdir(parents=True)
+            config.write_text("predicates_path: null\n")
+            implementation.write_text('format_kwargs["predicates_path"] = str(cfg.predicates_path)\n')
+
+    monkeypatch.delenv("MEDS_DEV_DIR", raising=False)
+    monkeypatch.setenv("MEDS_DEV_REF", "test-predicates-ref")
+    monkeypatch.setattr(integration.shutil, "which", lambda command: f"/usr/bin/{command}")
+    monkeypatch.setattr(integration, "run", fake_run)
+    checkout = integration.provision_meds_dev(Request(), TempPathFactory())
+    assert [
+        "/usr/bin/git",
+        "-C",
+        str(checkout),
+        "checkout",
+        "--detach",
+        "test-predicates-ref",
+    ] in commands
+
+
 def test_measurement_manifest_is_plausible(tmp_path, monkeypatch):
     dst = tmp_path / "measurement"
     render(dst, "packaged")
