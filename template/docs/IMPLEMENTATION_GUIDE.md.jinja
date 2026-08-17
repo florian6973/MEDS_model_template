@@ -8,9 +8,9 @@ Read the paper, supplement, repository, configs, data preparation, checkpoints, 
 Build a source-element inventory before implementation; do not infer the model solely from its headline
 architecture.
 
-## 2. Justify the DAG
+## 2. Justify the model profile
 
-This repository selected `{{ profile }}`. Confirm that its command graph matches the source's actual
+This repository selected the `{{ profile }}` model profile. Confirm that its commands match the source's actual
 training and prediction lifecycle. Record the justification in `IMPLEMENTATION_REPORT.md`; do not change
 graphs merely to avoid implementing a stage.
 
@@ -31,7 +31,7 @@ systems are all allowed.
 ## 5. Complete operational interfaces
 
 Finalize `model.yaml`, `requirements.txt`, `tests/e2e.py`, and `slurm/config.sh`. The local adapter runs the
-real DAG. The MEDS-DEV adapter supplies its isolated invocation. The MIMIC adapter locates/builds the demo
+real model profile. The MEDS-DEV adapter supplies its isolated invocation. The MIMIC adapter locates/builds the demo
 and the pinned `mortality/in_icu/first_24h` task through MEDS-DEV and reuses its predicates.
 
 Complete `tests/test_primary_behavior.py`; its initial failure is intentional. The template provides the
@@ -39,7 +39,7 @@ small `tests.signal.build_signal_dataset` example, in which one code alone predi
 history length and signal position do not leak the label. Use it unchanged, adapt its codes, or replace it
 when the model requires a fixed vocabulary, selected codes, predicates, derived features, numeric values,
 or another valid MEDS construction. The test must explicitly show that the signal survives the model's
-real selection/featurization layer, exercise the real DAG, and include a shuffled-label negative control.
+real selection/featurization layer, exercise the real model profile, and include a shuffled-label negative control.
 Use a profile-appropriate behavioral assertion: supervised/fine-tuned/probe models should learn the
 signal, while zero-shot or packaged models should demonstrate their claimed response without pretending
 to train.
@@ -61,7 +61,7 @@ Advance in this order. Each automated stage must pass before the next one starts
    accessing or running MIMIC-IV.
 4. **MIMIC-IV demo gate:** after approval, run `uv run pytest -m real_data -rs`. This builds or reuses the
    MEDS-DEV demo, derives labels with `mortality/in_icu/first_24h`, reuses MEDS-DEV's MIMIC-IV predicates,
-   and runs the complete selected DAG. The purpose is to expose scale-dependent pipeline, resource,
+   and runs the complete selected model profile. The purpose is to expose scale-dependent pipeline, resource,
    serialization, and key-coverage failures before a full-data run.
 5. **Demo report and human gate:** add the exact demo revision, task and predicate provenance, cohort
    counts, prediction-key coverage, measurements, failures, and fixes to the report. A human decides
@@ -86,7 +86,7 @@ Advance in this order. Each automated stage must pass before the next one starts
 
 Final predictions at every data gate must exactly cover the requested keys without relying on order. Do
 not assert portable performance thresholds; record wall time, process-tree PSS/RSS, GPU metrics,
-environment, and scale. Remove all placeholders and set `IS_STUB = False` only when the implemented DAG
+environment, and scale. Remove all placeholders and set `IS_STUB = False` only when the implemented model profile
 passes the applicable pre-demo gates; real-data access remains separately human-approved.
 
 ### MIMIC-IV demo task scope

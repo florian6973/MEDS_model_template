@@ -1,4 +1,4 @@
-"""Run the completed model's full DAG on the MEDS-DEV MIMIC-IV demo and its predicates."""
+"""Run the completed model profile on the MEDS-DEV MIMIC-IV demo and its predicates."""
 
 from pathlib import Path
 
@@ -14,7 +14,7 @@ pytestmark = [pytest.mark.slow, pytest.mark.real_data]
 @pytest.fixture(scope="session")
 def meds_dev(request, tmp_path_factory):
     if IS_STUB:
-        pytest.skip("model_stub: MIMIC-IV demo runs only after the real DAG is implemented")
+        pytest.skip("model_stub: MIMIC-IV demo runs only after the real model profile is implemented")
     return provision_meds_dev(request, tmp_path_factory)
 
 

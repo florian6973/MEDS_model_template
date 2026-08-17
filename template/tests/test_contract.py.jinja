@@ -1,7 +1,7 @@
-from meds_model_contract import DAGS, ModelRepository
+from meds_model_contract import MODEL_PROFILES, ModelRepository
 from {{ model_slug }}.commands import COMMANDS
 
 
 def test_command_registry_is_exact_selected_dag():
     repository = ModelRepository("{{ profile }}", COMMANDS)
-    assert tuple(repository.dag) == DAGS["{{ profile }}"]
+    assert tuple(repository.profile_commands) == MODEL_PROFILES["{{ profile }}"]

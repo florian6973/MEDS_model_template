@@ -5,7 +5,7 @@ Before editing, read `SPEC.md`, `README.md`, and `docs/IMPLEMENTATION_GUIDE.md` 
 - `src/meds_model_contract/` is the backend-neutral contract. Do not add framework, batching,
   preprocessing-format, or model assumptions there.
 - `src/{{ model_slug }}/`, `model.yaml`, command configuration, and `tests/e2e.py` are model-owned.
-- Preserve the `{{ profile }}` DAG and established command argument names.
+- Preserve the `{{ profile }}` model profile and established command argument names.
 - Intermediate payloads are opaque. Generic tests validate their envelopes, not their contents.
 - MEDS-DEV owns dataset-specific predicates; the model owns their interpretation.
 - Never associate outputs with prediction keys by row order.

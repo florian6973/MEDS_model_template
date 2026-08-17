@@ -4,7 +4,7 @@ from pathlib import Path
 
 import yaml
 
-from meds_model_contract import DAGS
+from meds_model_contract import MODEL_PROFILES
 
 
 ROOT = Path(__file__).parents[1]
@@ -29,6 +29,6 @@ def test_slurm_dry_run_is_non_mutating():
     )
     after = {p.relative_to(ROOT) for p in ROOT.rglob("*")}
     assert before == after
-    for command in DAGS["{{ profile }}"]:
+    for command in MODEL_PROFILES["{{ profile }}"]:
         assert command.value in result.stdout
     assert "sbatch" in result.stdout

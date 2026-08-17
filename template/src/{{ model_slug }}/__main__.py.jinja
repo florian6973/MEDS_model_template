@@ -22,7 +22,7 @@ def main() -> None:
         print("usage: meds-model <command|commands> [key=value ...]")
         return
     if sys.argv[1] == "commands":
-        print("\n".join(command.value for command in REPOSITORY.dag))
+        print("\n".join(command.value for command in REPOSITORY.profile_commands))
         return
     arguments = {}
     for item in sys.argv[2:]:

@@ -1,4 +1,4 @@
-"""Stable command vocabulary and the six supported MEDS model DAGs."""
+"""Stable command vocabulary and the six supported MEDS model profiles."""
 
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ class ArtifactType(StrEnum):
     predictions = "predictions"
 
 
-DAGS: dict[str, tuple[CommandName, ...]] = {
+MODEL_PROFILES: dict[str, tuple[CommandName, ...]] = {
     "supervised": (CommandName.preprocess_data, CommandName.supervised_train, CommandName.predict),
     "finetune": (
         CommandName.preprocess_data,
@@ -59,26 +59,28 @@ class Command(ABC):
 
 
 class ModelRepository:
-    """Validate and dispatch the model-owned implementations for a selected DAG."""
+    """Validate and dispatch the model-owned implementations for a selected model profile."""
 
     def __init__(self, profile: str, commands: Mapping[CommandName, type[Command]]) -> None:
-        if profile not in DAGS:
-            raise ValueError(f"Unknown profile {profile!r}; expected one of {', '.join(DAGS)}")
-        expected = set(DAGS[profile])
+        if profile not in MODEL_PROFILES:
+            expected_profiles = ", ".join(MODEL_PROFILES)
+            raise ValueError(f"Unknown model profile {profile!r}; expected one of {expected_profiles}")
+        expected = set(MODEL_PROFILES[profile])
         actual = set(commands)
         if actual != expected:
             raise ValueError(
-                f"The {profile!r} DAG requires {sorted(expected)}, but commands.py declares {sorted(actual)}"
+                f"The {profile!r} model profile requires {sorted(expected)}, but commands.py declares "
+                f"{sorted(actual)}"
             )
         self.profile = profile
         self.commands = dict(commands)
 
     @property
-    def dag(self) -> Sequence[CommandName]:
-        return DAGS[self.profile]
+    def profile_commands(self) -> Sequence[CommandName]:
+        return MODEL_PROFILES[self.profile]
 
     def run(self, name: CommandName | str, arguments: Mapping[str, Any]) -> Path:
         command_name = CommandName(name)
         if command_name not in self.commands:
-            raise ValueError(f"{command_name.value} is not part of the {self.profile} DAG")
+            raise ValueError(f"{command_name.value} is not part of the {self.profile} model profile")
         return self.commands[command_name]()(arguments)

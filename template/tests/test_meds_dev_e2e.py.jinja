@@ -17,7 +17,7 @@ MODEL_NAME = "{{ model_slug }}"
 @pytest.fixture(scope="session")
 def meds_dev(request, tmp_path_factory):
     if IS_STUB:
-        pytest.skip("model_stub: MEDS-DEV runs only after the real DAG is implemented")
+        pytest.skip("model_stub: MEDS-DEV runs only after the real model profile is implemented")
     return provision_meds_dev(request, tmp_path_factory)
 
 

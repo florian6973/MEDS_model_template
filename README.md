@@ -3,7 +3,7 @@
 This repository is a self-contained [Copier](https://copier.readthedocs.io) template for minimal,
 contract-first MEDS model repositories.
 
-The template fixes the external contract—MEDS input, six command DAGs and standard arguments, typed
+The template fixes the external contract—MEDS input, six model profiles and standard arguments, typed
 artifact manifests, final MEDS predictions, measurements, MEDS-DEV, SLURM, and GitHub result exchange—while
 leaving preprocessing, featurization, intermediate formats, frameworks, batching, and model execution to
 the generated repository.
@@ -49,14 +49,14 @@ so the command remains usable if formatting/bootstrap tasks are added later.
 |---|---|
 | `model_name` | Human-readable model name. |
 | `model_slug` | Importable Python package and MEDS-DEV model identifier. |
-| `profile` | One of the six supported command DAGs. |
+| `profile` | One of the six supported model profiles. |
 | `model_description` | Short description rendered into README and `model.yaml`. |
 | `author_name`, `author_email` | MEDS-DEV contact metadata. |
 | `uses_predicates` | Whether generated MEDS-DEV commands pass `external_predicates_file`. The model still owns interpretation. |
 | `implementation_source` | Paper path/URL, source repository path/URL, or both; prefilled into generated guidance and the report. |
 
 Profiles are `supervised`, `finetune`, `probe`, `zero_shot_direct`, `zero_shot_materialized`, and
-`packaged`. They select command topology, not an architecture or execution backend.
+`packaged`. A model profile selects required commands, not an architecture or execution backend.
 
 ## Work in the generated repository
 
@@ -78,7 +78,7 @@ end-to-end tests report explicit `model_stub` skips. Start with these rendered f
 6. `tests/e2e.py`
 7. `IMPLEMENTATION_REPORT.md`
 
-A completed implementation sets `IS_STUB = False` only after its actual DAG works.
+A completed implementation sets `IS_STUB = False` only after its actual model profile works.
 
 ## Copyable model-implementation prompt
 
@@ -102,7 +102,7 @@ completely before writing code. Inspect the paper, supplementary material, sourc
 configuration files, checkpoints, preprocessing code, and evaluation code available from the supplied
 source.
 
-Preserve the selected command DAG and standardized command arguments, MEDS input boundary, artifact
+Preserve the selected model profile and standardized command arguments, MEDS input boundary, artifact
 manifest envelopes, MEDS-DEV model.yaml interface, and final MEDS prediction output. Intermediate payload
 formats and execution mechanisms are model-owned: choose whatever preprocessing, featurization, framework,
 batching or non-batching strategy, external executable, storage format, and model architecture most
@@ -116,7 +116,7 @@ instead.
 Record every material source element as ported, adapted, or omitted, with evidence and justification, in
 IMPLEMENTATION_REPORT.md. Implement every registered command, finalize the implementation-specific
 command strings in model.yaml, and implement tests/e2e.py. Keep IS_STUB = True until the actual selected
-DAG completes and produces standards-conformant predictions.
+model profile completes and produces standards-conformant predictions.
 
 Then run:
 
@@ -152,7 +152,7 @@ uv run pytest -m real_data -rs
 - The default suite checks the contract and model-owned local end-to-end adapter.
 - `meds_dev` registers `model.yaml` and runs it in MEDS-DEV's isolated environment.
 - `real_data` builds or reuses the MEDS MIMIC-IV demo, extracts MEDS-DEV task
-  `mortality/in_icu/first_24h`, reuses MEDS-DEV's MIMIC predicates, and runs the full selected DAG.
+  `mortality/in_icu/first_24h`, reuses MEDS-DEV's MIMIC predicates, and runs the full selected model profile.
 
 The implementation guide defines what follows these commands: a report/review gate after the demo, then
 an explicitly authorized full MIMIC-IV run and final report. The demo's required task is ICU mortality;
@@ -193,7 +193,7 @@ uv run ruff check tests/test_render.py
 uv run ruff format --check tests/test_render.py
 ```
 
-`tests/test_render.py` renders all six DAGs, compiles the generated repositories, validates command
+`tests/test_render.py` renders all six model profiles, compiles the generated repositories, validates command
 registries and operational files, tests measurement manifests and run results, and exercises MEDS-DEV
 registration. To test the rendered repository itself, render it into a temporary directory and run:
 

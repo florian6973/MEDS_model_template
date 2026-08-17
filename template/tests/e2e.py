@@ -1,4 +1,4 @@
-"""Model-owned DAG adapters plus shared MEDS-DEV MIMIC demo provisioning."""
+"""Model-owned profile adapters plus shared MEDS-DEV MIMIC demo provisioning."""
 
 import os
 from collections.abc import Mapping, Sequence
@@ -27,14 +27,14 @@ class MEDSDevRun:
 
 def run_e2e(tmp_path, **inputs):
     raise NotImplementedError(
-        "Prepare a small MEDS input/task, execute the selected DAG's real commands, and return "
+        "Prepare a small MEDS input/task, execute the selected model profile's real commands, and return "
         "E2EResult(artifacts, labels_dir, evaluated splits)."
     )
 
 
 def prepare_meds_dev_run(meds_dev, tmp_path):
     """Return ``MEDSDevRun(args, predictions_dir, labels_dir, splits)`` for this implementation."""
-    raise NotImplementedError("Configure the selected DAG's real MEDS-DEV run")
+    raise NotImplementedError("Configure the selected model profile's real MEDS-DEV run")
 
 
 def prepare_mimic_demo(meds_dev, tmp_path):

@@ -16,7 +16,7 @@ import yaml
 REPO = Path(__file__).resolve().parents[1]
 TEMPLATE_REPO = REPO
 
-DAGS = {
+MODEL_PROFILES = {
     "supervised": ["preprocess_data", "supervised_train", "predict"],
     "finetune": ["preprocess_data", "pretrain", "supervised_train", "predict"],
     "probe": ["preprocess_data", "pretrain", "infer", "supervised_train", "predict"],
@@ -55,8 +55,8 @@ def load_integration_module(rendered: Path):
     return module
 
 
-@pytest.mark.parametrize("profile", DAGS)
-def test_renders_six_minimal_dags(tmp_path, profile):
+@pytest.mark.parametrize("profile", MODEL_PROFILES)
+def test_renders_six_model_profiles(tmp_path, profile):
     dst = tmp_path / profile
     slug = render(dst, profile, uses_predicates=True)
     required = [
@@ -90,7 +90,7 @@ def test_renders_six_minimal_dags(tmp_path, profile):
     command_list = subprocess.run(
         ["python", "-m", slug, "commands"], env=env, text=True, capture_output=True, check=True
     ).stdout.splitlines()
-    assert command_list == DAGS[profile]
+    assert command_list == MODEL_PROFILES[profile]
 
     syntax = subprocess.run(
         ["bash", "-n", "slurm/config.sh", "slurm/job.sbatch", "slurm/submit.sh", "scripts/github-sync.sh"],
