@@ -1,0 +1,19 @@
+"""Required model-owned proof that the implementation performs its primary behavior."""
+
+import pytest
+
+
+def test_primary_behavior():
+    """Replace this failure with positive-signal and shuffled-label control executions.
+
+    ``tests.signal.build_signal_dataset`` is a small example fixture. Use it unchanged, adapt its codes,
+    or replace it when necessary. The completed test must run the real DAG and explicitly prove that the
+    signal code is present in the model's selected codes, vocabulary, predicates, or derived features
+    before asserting that the model learns or otherwise responds to it. It must also run a shuffled-label
+    negative control. Use behavior appropriate to the selected DAG; only trainable profiles should be
+    required to learn during the test.
+    """
+    pytest.fail(
+        "Implement the primary-behavior test: bind a known MEDS signal to the model's real features, "
+        "run the real DAG, assert its expected behavior, and include a shuffled-label negative control."
+    )

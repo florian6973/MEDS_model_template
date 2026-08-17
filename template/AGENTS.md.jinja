@@ -10,6 +10,9 @@ Before editing, read `SPEC.md`, `README.md`, and `docs/IMPLEMENTATION_GUIDE.md` 
 - MEDS-DEV owns dataset-specific predicates; the model owns their interpretation.
 - Never associate outputs with prediction keys by row order.
 - Keep `IS_STUB = True` until every registered command and the real end-to-end adapter work.
+- Replace the intentional failure in `tests/test_primary_behavior.py`. Prove that a known signal reaches
+  the model's real selected codes/features and produces the expected behavior, with a shuffled-label
+  negative control; adapt the example signal dataset rather than forcing an incompatible representation.
 - Run pytest with `-rs`, account for every skip, and require zero `model_stub` skips before completion.
 - Follow the ordered gates in `docs/IMPLEMENTATION_GUIDE.md`. Stop for human approval before the MIMIC-IV
   demo and again before the full MIMIC-IV run; do not infer data access or cluster authorization.

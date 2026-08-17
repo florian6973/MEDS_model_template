@@ -72,6 +72,8 @@ def test_renders_six_minimal_dags(tmp_path, profile):
         "slurm/submit.sh",
         "scripts/github-sync.sh",
         "tests/test_end_to_end.py",
+        "tests/test_primary_behavior.py",
+        "tests/signal.py",
         "tests/test_meds_dev_e2e.py",
         "tests/test_mimic_demo_e2e.py",
         "tests/e2e.py",
@@ -140,6 +142,43 @@ def test_mimic_task_prepends_pinned_meds_dev_venv_only_for_task(tmp_path, monkey
     assert "env" not in dataset_kwargs
     assert task_command[0] == str(meds_dev / ".venv/bin/meds-dev-task")
     assert task_kwargs["env"]["PATH"] == f"{meds_dev / '.venv/bin'}{os.pathsep}/ambient/bin"
+
+
+def test_example_signal_dataset_has_no_length_or_position_leak(tmp_path):
+    import polars as pl
+
+    dst = tmp_path / "signal-example"
+    render(dst, "supervised")
+    path = dst / "tests" / "signal.py"
+    spec = importlib.util.spec_from_file_location("rendered_signal", path)
+    signal = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(signal)
+
+    root = signal.build_signal_dataset(tmp_path / "cohort", n_train=40, n_tuning=10, n_held_out=10)
+    events = pl.scan_parquet(root / "data" / "*" / "*.parquet").collect()
+    labels = pl.concat(
+        [pl.read_parquet(path) for path in sorted((root / "task_labels/signal_task").glob("*.parquet"))]
+    )
+    observed = events.group_by("subject_id").agg(
+        pl.len().alias("length"),
+        (pl.col("code") == signal.SIGNAL_CODE).any().alias("has_signal"),
+    )
+    checked = labels.join(observed, on="subject_id")
+    assert checked["boolean_value"].to_list() == checked["has_signal"].to_list()
+    assert checked["length"].min() >= 5
+    assert checked["length"].max() <= 10
+    assert checked.filter(pl.col("boolean_value")).height > 0
+    assert checked.filter(~pl.col("boolean_value")).height > 0
+
+
+def test_primary_behavior_is_a_required_failing_placeholder(tmp_path):
+    dst = tmp_path / "primary-behavior"
+    render(dst, "supervised")
+    test = (dst / "tests/test_primary_behavior.py").read_text()
+    assert "pytest.fail" in test
+    assert "shuffled-label negative control" in test
+    assert "selected codes, vocabulary, predicates, or derived features" in test
 
 
 def test_predicates_are_external_not_a_rendered_semantic_format(tmp_path):

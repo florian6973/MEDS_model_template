@@ -34,13 +34,24 @@ Finalize `model.yaml`, `requirements.txt`, `tests/e2e.py`, and `slurm/config.sh`
 real DAG. The MEDS-DEV adapter supplies its isolated invocation. The MIMIC adapter locates/builds the demo
 and the pinned `mortality/in_icu/first_24h` task through MEDS-DEV and reuses its predicates.
 
+Complete `tests/test_primary_behavior.py`; its initial failure is intentional. The template provides the
+small `tests.signal.build_signal_dataset` example, in which one code alone predicts a binary label while
+history length and signal position do not leak the label. Use it unchanged, adapt its codes, or replace it
+when the model requires a fixed vocabulary, selected codes, predicates, derived features, numeric values,
+or another valid MEDS construction. The test must explicitly show that the signal survives the model's
+real selection/featurization layer, exercise the real DAG, and include a shuffled-label negative control.
+Use a profile-appropriate behavioral assertion: supervised/fine-tuned/probe models should learn the
+signal, while zero-shot or packaged models should demonstrate their claimed response without pretending
+to train.
+
 ## 6. Follow the staged verification workflow
 
 Advance in this order. Each automated stage must pass before the next one starts.
 
 1. **Local gate:** run `uv run pytest -rs`. This exercises the contract and the model-owned basic
    end-to-end adapter on a small synthetic fixture. Return `E2EResult` from that adapter so the test can
-   compare actual prediction keys with the requested label index and evaluated splits.
+   compare actual prediction keys with the requested label index and evaluated splits. It also runs the
+   required primary-behavior test; structural conformance alone does not pass this gate.
 2. **MEDS-DEV gate:** run `uv run pytest -m meds_dev -rs`. This verifies installation and the command
    strings in `model.yaml` through MEDS-DEV's isolated execution path. Return `MEDSDevRun` from its adapter
    with the invocation, prediction directory, requested label index, and evaluated splits.
