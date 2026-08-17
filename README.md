@@ -17,6 +17,17 @@ uv tool install copier
 copier copy . ../my-meds-model
 ```
 
+The rendered repository commits `.copier-answers.yml`, which records its template source, revision, and
+answers. To bring later template changes into that repository, review its working tree and run:
+
+```bash
+cd ../my-meds-model
+copier update --trust
+```
+
+For portable updates across machines, copy from the Git repository URL rather than from a local checkout;
+Copier records that source in the answers file.
+
 For a reproducible non-interactive render:
 
 ```bash

@@ -6,6 +6,8 @@ import compileall
 import importlib.util
 import os
 import subprocess
+import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -59,6 +61,7 @@ def test_renders_six_minimal_dags(tmp_path, profile):
     slug = render(dst, profile, uses_predicates=True)
     required = [
         "model.yaml",
+        ".copier-answers.yml",
         "AGENTS.md",
         "SPEC.md",
         "IMPLEMENTATION_REPORT.md",
@@ -94,6 +97,49 @@ def test_renders_six_minimal_dags(tmp_path, profile):
         capture_output=True,
     )
     assert syntax.returncode == 0, syntax.stderr
+
+
+def test_copier_answers_record_portable_update_metadata(tmp_path):
+    dst = tmp_path / "answers"
+    render(dst, "supervised")
+    answers = yaml.safe_load((dst / ".copier-answers.yml").read_text())
+    assert answers["_src_path"]
+    assert answers["model_slug"] == "v2_supervised"
+    assert answers["profile"] == "supervised"
+
+
+def test_mimic_task_prepends_pinned_meds_dev_venv_only_for_task(tmp_path, monkeypatch):
+    dst = tmp_path / "mimic-path"
+    render(dst, "supervised")
+    calls = []
+
+    integration = types.ModuleType("rendered_tests.integration")
+    integration.RUN_TIMEOUT = 123
+    integration.venv_bin = lambda checkout: checkout / ".venv" / "bin"
+    integration.run = lambda command, **kwargs: calls.append(([str(value) for value in command], kwargs))
+    package = types.ModuleType("rendered_tests")
+    package.__path__ = [str(dst / "tests")]
+    monkeypatch.setitem(sys.modules, "rendered_tests", package)
+    monkeypatch.setitem(sys.modules, "rendered_tests.integration", integration)
+
+    path = dst / "tests" / "e2e.py"
+    spec = importlib.util.spec_from_file_location("rendered_tests.e2e", path)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+
+    meds_dev = tmp_path / "MEDS-DEV"
+    monkeypatch.delenv("MEDS_DEMO_DIR", raising=False)
+    monkeypatch.setenv("PATH", "/ambient/bin")
+    module.prepare_mimic_demo(meds_dev, tmp_path)
+
+    assert len(calls) == 2
+    dataset_command, dataset_kwargs = calls[0]
+    task_command, task_kwargs = calls[1]
+    assert dataset_command[0] == str(meds_dev / ".venv/bin/meds-dev-dataset")
+    assert "env" not in dataset_kwargs
+    assert task_command[0] == str(meds_dev / ".venv/bin/meds-dev-task")
+    assert task_kwargs["env"]["PATH"] == f"{meds_dev / '.venv/bin'}{os.pathsep}/ambient/bin"
 
 
 def test_predicates_are_external_not_a_rendered_semantic_format(tmp_path):

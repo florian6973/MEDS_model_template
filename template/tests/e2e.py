@@ -66,6 +66,9 @@ def prepare_mimic_demo(meds_dev, tmp_path):
             f"dataset_dir={dataset_dir}",
             f"output_dir={labels_dir}",
         ],
+        # MEDS-DEV's task runner launches venv-installed helpers by bare name.
+        # Prepend the pinned checkout so an ambient MEDS-DEV install cannot win.
+        env={"PATH": f"{venv_bin(meds_dev)}{os.pathsep}{os.environ['PATH']}"},
         timeout=RUN_TIMEOUT,
     )
     predicates_file = meds_dev / "src" / "MEDS_DEV" / "datasets" / "MIMIC-IV" / "predicates.yaml"
