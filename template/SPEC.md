@@ -25,6 +25,14 @@ MEDS standard. Implementations MUST NOT reinterpret `subject_id`, `time`, `code`
 events (`time = null`), or code metadata incompatibly. MIMIC-IV demo in MEDS form is the canonical real
 data example, not an additional schema.
 
+The `train`, `tuning`, and `held_out` splits are a boundary, not a convention. Any statistic fitted over a
+population — vocabularies, code frequencies, quantile bins, normalization constants, feature selections —
+MUST be fitted on the training split alone. Fitting one over all splits is *transductive* leakage: it is
+not label leakage, because quantities like code frequency are label-independent, so an implementation can
+satisfy every label-leakage check while carrying it. Where the fitting scope is not the implementation's
+to control, because preprocessing is delegated upstream, it MUST declare which quantity was fitted over
+which population rather than leave the scope unstated.
+
 ### 2.2 Task
 
 A task input is an index of `(subject_id, prediction_time)` and, for training/evaluation only, a value
@@ -149,6 +157,7 @@ portable pass/fail thresholds.
 
 The generated repository MUST test command discovery, selected-model-profile consistency, artifact compatibility,
 atomic publication, predicate provenance, prediction key coverage/uniqueness, absence of label
-leakage, resource measurement presence, `model.yaml`, SLURM dry-run, and its real end-to-end chain.
+leakage and of transductive fitting (section 2.1), resource measurement presence, `model.yaml`, SLURM
+dry-run, and its real end-to-end chain.
 MIMIC-IV demo conformance is opt-in through a `real_data` pytest marker; a normal test run MUST NOT
 download it.
