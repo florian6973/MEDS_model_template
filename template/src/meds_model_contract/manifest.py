@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import subprocess
 import os
 import resource
 import shutil
@@ -105,6 +106,42 @@ def digest_file(path: Path | str) -> str:
     return f"sha256:{digest}"
 
 
+def _repo_root() -> Path:
+    """The model repository, resolved from this file rather than the caller's cwd.
+
+    A run's artifacts may live far from its code -- an off-tree ``RUN_ROOT`` puts them on
+    another filesystem entirely -- so neither the working directory nor the artifact
+    destination identifies the repository. This file's own location does.
+    """
+    return Path(__file__).resolve().parents[2]
+
+
+def _code_provenance() -> dict[str, Any]:
+    """Commit and cleanliness of the code producing this artifact.
+
+    ``git_commit`` is null outside a checkout, which is honest rather than wrong. ``dirty``
+    is the load-bearing field: a commit alone misdescribes a run made from a modified tree.
+    """
+
+    def _git(*args: str) -> str | None:
+        try:
+            return subprocess.run(
+                ["git", "-C", str(_repo_root()), *args],
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout.strip()
+        except (FileNotFoundError, subprocess.CalledProcessError):
+            return None
+
+    commit = _git("rev-parse", "HEAD")
+    status = _git("status", "--porcelain")
+    return {
+        "git_commit": commit,
+        "dirty": None if status is None else bool(status),
+    }
+
+
 @contextmanager
 def measured_artifact(
     destination: Path | str,
@@ -148,6 +185,7 @@ def measured_artifact(
                 "producer": producer,
             },
             "command": {"name": command, "config_digest": config_digest},
+            "code": _code_provenance(),
             "inputs": recorded_inputs,
             "semantics_digest": semantics_digest,
             "resources": {

@@ -11,6 +11,22 @@ if [[ "${1:-}" == "--dry-run" ]]; then
   shift
 fi
 
+# A cluster run must be reproducible from a commit. The refusal is here rather than in the
+# contract package because this is where the hazard is: a unit test on a modified tree is
+# normal, a multi-hour job whose code exists nowhere but one disk is not. --dry-run warns
+# instead of refusing, so a run can be prepared and reviewed before its commit is made.
+tree_status="$(git -C "$SCRIPT_DIR" status --porcelain 2>/dev/null || true)"
+if [[ -n "$tree_status" ]]; then
+  if [[ "$dry_run" == true ]]; then
+    echo "WARNING: working tree is dirty; this dry-run does not describe any commit." >&2
+  else
+    echo "Refusing to submit: the working tree is dirty, so this run would not be" >&2
+    echo "reproducible from any commit. Commit or stash first." >&2
+    git -C "$SCRIPT_DIR" status --porcelain >&2
+    exit 6
+  fi
+fi
+
 mapfile -t commands < <(meds-model commands)
 if [[ -z "${commands[0]:-}" ]]; then
   echo "No commands declared" >&2
