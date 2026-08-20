@@ -43,8 +43,6 @@ for command in "${commands[@]}"; do
   if ! $dry_run; then
     mkdir -p "$args_dir"
     stage_args "$command" > "$args_file"
-  else
-    args_file="$RUN_ROOT/$run_id/command-args/$command.args"
   fi
   partition="$PARTITION_GPU"
   time_limit="$TIME_GPU"
@@ -60,6 +58,12 @@ for command in "${commands[@]}"; do
   fi
   submit+=("${gres[@]}" --export="ALL,MEDS_MODEL_COMMAND=$command,MEDS_MODEL_ARGS_FILE=$args_file,RUN_ID=$run_id" "$SCRIPT_DIR/job.sbatch")
   if $dry_run; then
+    # Print what the model will be told to do, not only the sbatch wrapper. Without this
+    # a --dry-run review cannot show the model's arguments at all, so grepping it for a
+    # misrouted input directory returns nothing -- which is also what a correct run looks
+    # like, making the review unfalsifiable for the thing it exists to check. Written to
+    # stdout only: dry-run stays non-mutating, so no args file is produced.
+    stage_args "$command" | sed "s|^|# $command: |"
     printf '%q ' "${submit[@]}"
     printf '\n'
     dependency="DRY_RUN_${command}"
