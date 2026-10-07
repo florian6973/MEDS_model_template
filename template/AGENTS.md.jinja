@@ -15,7 +15,7 @@ Before editing, read `SPEC.md`, `README.md`, and `docs/IMPLEMENTATION_GUIDE.md` 
   negative control; adapt the example signal dataset rather than forcing an incompatible representation.
 - Run pytest with `-rs`, account for every skip, and require zero `model_stub` skips before completion.
 - Follow the ordered gates in `docs/IMPLEMENTATION_GUIDE.md`. Stop for human approval before the MIMIC-IV
-  demo and again before the full MIMIC-IV run; do not infer data access or cluster authorization.
+  demo and again before the selected full-data run; do not infer data access or cluster authorization.
 - Submit cluster jobs only from the recorded SHA of a clean, committed, pushed revision. Use the approved
   external full-data `work/` task bundle, record its registry digest, and synchronize structured results.
 - Report exact source revisions, commands, coverage, and measurements in `IMPLEMENTATION_REPORT.md`.
